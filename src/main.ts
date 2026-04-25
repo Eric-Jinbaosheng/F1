@@ -250,7 +250,7 @@ function bootstrap(): void {
         .addScaledVector(lat, 4)
         .add(new THREE.Vector3(0, 3.5, 0))
       bundle.camera.lookAt(carP.x, carP.y + 0.6, carP.z)
-      menu.show(async (difficulty) => {
+      menu.show(async ({ difficulty, inputMode }) => {
         ctx.difficulty = difficulty
         SFX.uiClick()
         unlockAudio()
@@ -265,12 +265,21 @@ function bootstrap(): void {
           console.warn('[F1S] audio rig init failed:', e)
         }
         try {
-          world.input = await initInput()
+          world.input = await initInput(inputMode)
           ctx.inputMode = world.input.mode
           if (world.input.mode === 'keyboard') {
             showToast('键盘控制:↑/W 油门,↓/S 刹车,←→/A D 转向,Shift = DRS')
           } else if (world.input.mode === 'touch') {
             showToast('触屏模式:左右半屏转向 + 油门')
+          } else if (world.input.mode === 'gyro') {
+            if (world.input.gyroSource === 'mouse') {
+              showToast('鼠标摇杆:鼠标偏屏幕中心 = 推摇杆。上=加速,下=刹车,左右=转向')
+            } else {
+              showToast('体感模式:左右倾 = 转向,前倾 = 加速,后倾 = 刹车')
+            }
+          }
+          if (inputMode === 'gyro' && world.input.mode !== 'gyro') {
+            showToast('体感不可用,已回退到默认控制')
           }
         } catch (e) {
           console.warn('[F1S] input init failed:', e)
@@ -453,25 +462,44 @@ function bootstrap(): void {
             world.finishedOrder.push(i)
           }
         }
-        // Body bump: distance check with debounce.
+        // Physical body collision: separate cars every frame they overlap,
+        // count it as one bump per cooldown window, slow both cars.
         if (world.opponentBumpCooldown[i] > 0) {
           world.opponentBumpCooldown[i] -= dt
         }
-        const dx = opp.pos.x - physics.state.pos.x
-        const dz = opp.pos.z - physics.state.pos.z
-        if (
-          dx * dx + dz * dz < COLLIDE_DIST_SQ &&
-          world.opponentBumpCooldown[i] <= 0 &&
-          !physics.state.crashed
-        ) {
-          ctx.raceData.opponentHits++
-          world.opponentBumpCooldown[i] = BUMP_COOLDOWN_S
-          SFX.crash()
-          triggerShake(0.35, 0.3)
-          if (navigator.vibrate) navigator.vibrate(80)
-          car.emitSparks(physics.state.pos.clone().add(new THREE.Vector3(0, 0.3, 0)), 12)
-          // Slow the player a bit on contact for tactile feedback.
-          physics.state.speed *= 0.85
+        const dx = physics.state.pos.x - opp.pos.x
+        const dz = physics.state.pos.z - opp.pos.z
+        const distSq = dx * dx + dz * dz
+        if (distSq < COLLIDE_DIST_SQ && !physics.state.crashed) {
+          const dist = Math.max(Math.sqrt(distSq), 0.01)
+          const nx = dx / dist
+          const nz = dz / dist
+
+          // Hard separation — push player out so cars never interpenetrate.
+          physics.state.pos.x = opp.pos.x + nx * COLLIDE_DIST
+          physics.state.pos.z = opp.pos.z + nz * COLLIDE_DIST
+
+          if (world.opponentBumpCooldown[i] <= 0) {
+            ctx.raceData.opponentHits++
+            world.opponentBumpCooldown[i] = BUMP_COOLDOWN_S
+            SFX.crash()
+            triggerShake(0.55, 0.45)
+            if (navigator.vibrate) navigator.vibrate(120)
+            car.emitSparks(
+              physics.state.pos.clone().add(new THREE.Vector3(0, 0.3, 0)),
+              28,
+            )
+            // Player loses momentum on contact.
+            physics.state.speed *= 0.55
+            // Bounce heading slightly away from contact normal.
+            const fx = Math.sin(physics.state.heading)
+            const fz = Math.cos(physics.state.heading)
+            const cross = fx * nz - fz * nx
+            physics.state.heading += Math.sign(cross) * 0.10
+            // AI also takes a hit: brief slowdown + wobble.
+            opp.speed *= 0.65
+            if (opp.mistakeRemaining < 0.5) opp.mistakeRemaining = 0.5
+          }
         }
       }
       if (world.opponentCars) world.opponentCars.update(world.opponents)
@@ -483,6 +511,7 @@ function bootstrap(): void {
         speedKmh: physics.state.speed * 3.6,
         lapMs: Math.max(0, lapMs),
         mode: ctx.inputMode,
+        gyroSource: world.input?.gyroSource ?? null,
         position: rank.position,
         fieldSize: rank.fieldSize,
       })

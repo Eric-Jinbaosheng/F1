@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [viteSingleFile({ removeViteModuleLoader: true })],
@@ -11,7 +14,7 @@ export default defineConfig({
     assetsInlineLimit: 100_000_000,
     modulePreload: { polyfill: false },
     rollupOptions: {
-      input: resolve(__dirname, 'dev.html'),
+      input: resolve(__dirname, 'index.html'),
       output: {
         inlineDynamicImports: true,
         manualChunks: undefined,
@@ -35,6 +38,6 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5188,
     strictPort: true,
-    open: 'http://localhost:5188/dev.html',
+    open: 'http://localhost:5188/index.html',
   },
 })

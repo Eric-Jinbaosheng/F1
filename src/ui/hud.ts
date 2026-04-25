@@ -7,6 +7,7 @@ export interface HudController {
     speedKmh: number
     lapMs: number
     mode: string
+    gyroSource?: 'sensor' | 'mouse' | null
     position?: number
     fieldSize?: number
   }) => void
@@ -85,6 +86,7 @@ export function createHud(): HudController {
     speedKmh: number
     lapMs: number
     mode: string
+    gyroSource?: 'sensor' | 'mouse' | null
     position?: number
     fieldSize?: number
   }): void => {
@@ -93,7 +95,9 @@ export function createHud(): HudController {
     if (modeEl) {
       modeEl.textContent =
         data.mode === 'gyro'
-          ? '体感模式'
+          ? data.gyroSource === 'mouse'
+            ? '鼠标摇杆 · 移动鼠标 = 推摇杆 · 上下=油门/刹车'
+            : '体感模式 · 左右倾=转向 · 前后倾=油门/刹车'
           : data.mode === 'keyboard'
             ? '键盘模式 ↑↓←→ / Space=油门 Shift=DRS'
             : '触屏模式'

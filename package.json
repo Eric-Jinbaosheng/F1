@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cp dist/dev.html index.html && node -e \"const fs=require('fs');const p='index.html';let s=fs.readFileSync(p,'utf8');s=s.replace(/ crossorigin(=\\\"[^\\\"]*\\\")?/g,'');fs.writeFileSync(p,s);console.log('stripped crossorigin')\"",
+    "build": "vite build && node -e \"const fs=require('fs');const p='dist/index.html';let s=fs.readFileSync(p,'utf8');s=s.replace(/ crossorigin(=\\\"[^\\\"]*\\\")?/g,'');fs.writeFileSync(p,s);console.log('stripped crossorigin')\"",
     "preview": "vite preview",
-    "size": "ls -lh index.html dist/dev.html 2>/dev/null"
+    "size": "ls -lh dist/index.html 2>/dev/null",
+    "zip": "cd dist && zip -r ../submission.zip ."
   },
   "devDependencies": {
     "typescript": "^5.6.3",

@@ -36,10 +36,14 @@ export interface OpponentState {
 }
 
 const DIFFICULTY_SCALE: Record<Difficulty, number> = {
-  easy: 0.86,
+  easy: 0.88,
   medium: 1.0,
-  hard: 1.06,
+  hard: 1.12,
 }
+
+/** Base speed cap — kept under the player's MAX_SPEED (85 m/s ≈ 306 km/h)
+ *  so AIs can never run away from the player on a flat-out straight. */
+const BASE_SPEED_CAP = 84
 
 const PROFILES: Array<Omit<OpponentProfile, 'baseSpeed' | 'latGripG'>> = [
   // Veteran: balanced, mistakes rarely.
@@ -54,18 +58,20 @@ export function createOpponents(track: TrackBundle, difficulty: Difficulty): Opp
   const k = DIFFICULTY_SCALE[difficulty]
   // Per-AI base speed and grip — Aggressor is fastest on straights but
   // worst in corners; Veteran is the most balanced.
-  // Targets a field average of ~78 m/s (≈280 km/h) on medium difficulty.
+  //   medium (k=1.0): avg ≈ 73 m/s ≈ 263 km/h
+  //   easy   (k=0.88):              ≈ 230 km/h
+  //   hard   (k=1.12, capped):      ≈ 290 km/h
   const tuning: Array<{ base: number; grip: number }> = [
-    { base: 86, grip: 1.05 },   // Veteran
-    { base: 92, grip: 0.85 },   // Aggressor
-    { base: 84, grip: 0.95 },   // Rookie
+    { base: 71, grip: 1.05 },   // Veteran   ≈ 255 km/h
+    { base: 78, grip: 0.85 },   // Aggressor ≈ 281 km/h (capped at 302 on hard)
+    { base: 69, grip: 0.95 },   // Rookie    ≈ 248 km/h
   ]
 
   const opps: OpponentState[] = []
   for (let i = 0; i < 3; i++) {
     const profile: OpponentProfile = {
       ...PROFILES[i],
-      baseSpeed: tuning[i].base * k,
+      baseSpeed: Math.min(tuning[i].base * k, BASE_SPEED_CAP),
       latGripG: tuning[i].grip * k,
     }
     const t = ((profile.startStagger % 1) + 1) % 1
@@ -125,13 +131,16 @@ export function updateOpponent(
     : Number.POSITIVE_INFINITY
   let vTarget = Math.min(opp.profile.baseSpeed, vMaxCurve)
 
-  // --- Catchup: when behind the player, briefly raise the cap. The further
-  // behind, the bigger the boost — but max +18 % so the AI can't teleport.
+  // --- Catchup: when behind the player, lift the cap toward player MAX
+  // (85 m/s). The bigger the gap, the harder the AI tries — at ~110 m
+  // behind it's flat-out at 85 m/s. Capped at MAX so AI never out-runs the
+  // player's top speed.
+  const PLAYER_MAX = 85
   if (playerProgress !== undefined) {
     const ahead = playerProgress - (opp.lap + opp.t)
-    if (ahead > 0.002) {
-      const boostFactor = 1 + Math.min(0.18, ahead * 18)
-      vTarget = Math.min(opp.profile.baseSpeed * 1.18, vTarget * boostFactor)
+    if (ahead > 0.001) {
+      const k = Math.min(1, ahead / 0.020) // 0..1 over a 0.020-progress gap
+      vTarget = Math.min(PLAYER_MAX, vTarget + (PLAYER_MAX - vTarget) * k * 0.85)
     }
   }
 

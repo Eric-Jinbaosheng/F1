@@ -1,4 +1,7 @@
 import * as THREE from 'three'
+// Inlined as a base64 data URL by Vite (assetsInlineLimit = 100 MB) so the
+// final bundle is fully offline — no fetch / XHR at runtime.
+import shanghaiEnvUrl from '../assets/textures/shanghai_environment.png?url'
 
 const ROAD_HALF_WIDTH = 7 // 14 m total = SIC spec
 const KERB_WIDTH = 2.0
@@ -6,7 +9,7 @@ const TRACK_SEGMENTS = 2000 // dense sampling: avoids kerb-into-road overlap on 
 
 // --- Environment ground (satellite-style backdrop). Tunable so the
 // texture can be re-aligned without touching geometry.
-const ENV_TEXTURE_PATH = '/textures/shanghai_environment.png'
+const ENV_TEXTURE_PATH = shanghaiEnvUrl
 const ENV_WIDTH = 1600
 const ENV_DEPTH = 1000
 const ENV_ALIGNMENT = {
