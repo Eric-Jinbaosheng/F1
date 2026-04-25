@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>F1 体感飙速</title>
+    <style>
+      :root {
+        --bg: #0a0e1a;
+        --accent: #ff1801;
+        --text: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100dvw;
+        height: 100dvh;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+        overscroll-behavior: none;
+        touch-action: none;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+        width: 100dvw;
+        height: 100dvh;
+      }
+      #app canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      /* 竖屏蒙版 */
+      #rotate-mask {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 18px;
+        gap: 16px;
+      }
+      #rotate-mask .icon {
+        width: 64px;
+        height: 64px;
+        border: 3px solid var(--accent);
+        border-radius: 8px;
+        animation: rotate-hint 2s ease-in-out infinite;
+      }
+      @keyframes rotate-hint {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(90deg); }
+      }
+      @media (orientation: portrait) {
+        #rotate-mask { display: flex; }
+      }
+      /* Toast */
+      .f1s-toast {
+        position: fixed;
+        left: 50%;
+        bottom: 40px;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.85);
+        color: var(--text);
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 10000;
+        max-width: 80vw;
+        text-align: center;
+        animation: toast-in 0.2s ease-out;
+      }
+      @keyframes toast-in {
+        from { opacity: 0; transform: translate(-50%, 10px); }
+        to   { opacity: 1; transform: translate(-50%, 0); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="rotate-mask">
+      <div class="icon"></div>
+      <div>请旋转设备至横屏</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
