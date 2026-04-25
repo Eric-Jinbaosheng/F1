@@ -3,6 +3,7 @@ import { installGlobalErrorHandlers, showToast } from './utils/error'
 import { storage } from './utils/storage'
 import { createScene } from './render/scene'
 import { createTrack, type TrackBundle } from './render/track'
+import { pickRandomWeather } from './render/weather'
 import { createCar, type CarBundle } from './render/car'
 import { createLightsRig, createCountdown } from './render/lights'
 import { createPhysics, PHYS_MAX_SPEED, type PhysicsBundle } from './game/physics'
@@ -14,6 +15,7 @@ import { createHud } from './ui/hud'
 import { createResult } from './ui/result'
 import { SFX, unlockAudio } from './audio/zzfx'
 import { createAudioRig, type AudioRig } from './audio/engine'
+import { CommentarySystem } from './audio/commentary'
 import {
   createOpponents,
   updateOpponent,
@@ -31,6 +33,7 @@ interface World {
   lightsRig: ReturnType<typeof createLightsRig> | null
   countdown: ReturnType<typeof createCountdown> | null
   audio: AudioRig | null
+  commentary: CommentarySystem
   raceStart: number
   shakeT: number
   shakeMag: number
@@ -82,6 +85,14 @@ function bootstrap(): void {
   bundle.scene.add(car.particles)
   const physics = createPhysics(track)
 
+  // Pick a random weather/time-of-day preset for this session and tint
+  // sky / sun / hemi / clouds / haze accordingly.
+  const weather = pickRandomWeather()
+  bundle.applyWeather(weather)
+  track.applyWeather(weather)
+  console.log('[F1S] weather:', weather.id)
+  setTimeout(() => showToast(`今日天气:${weather.label}`, 2400), 200)
+
   const world: World = {
     bundle,
     track,
@@ -91,6 +102,7 @@ function bootstrap(): void {
     lightsRig: null,
     countdown: null,
     audio: null,
+    commentary: new CommentarySystem({ volume: 0.9 }),
     raceStart: 0,
     shakeT: 0,
     shakeMag: 0,
@@ -100,6 +112,73 @@ function bootstrap(): void {
     opponentBumpCooldown: [],
     opponentFinished: [],
     finishedOrder: [],
+  }
+
+  // --- Commentary: preload clips eagerly, unlock on first user gesture.
+  void world.commentary.preload()
+  const unlockCommentary = (): void => world.commentary.unlock()
+  window.addEventListener('pointerdown', unlockCommentary, { once: true })
+  window.addEventListener('keydown', unlockCommentary, { once: true })
+  window.addEventListener('touchstart', unlockCommentary, { once: true })
+
+  // --- Corner detector. Samples the curve's tangent at the player's
+  // projected t and t+ε to estimate local curvature κ ≈ Δheading / Δs;
+  // a state machine fires first_corner / clean_corner / wide_corner.
+  const CORNER_KAPPA_ENTER = 0.005 // ~R 200 m: anything tighter counts as cornering
+  const CORNER_KAPPA_EXIT = 0.0025
+  const CORNER_LOOKAHEAD = 12 // metres
+  const cornerState = {
+    inCorner: false,
+    firstCornerPlayed: false,
+    crashedThisCorner: false,
+    wideThisCorner: false,
+  }
+  const sampleCurvature = (t: number): number => {
+    const tg1 = track.getTangentAt(((t % 1) + 1) % 1)
+    const ds = CORNER_LOOKAHEAD / track.length
+    const tg2 = track.getTangentAt((((t + ds) % 1) + 1) % 1)
+    const dot = Math.max(-1, Math.min(1, tg1.x * tg2.x + tg1.z * tg2.z))
+    const ang = Math.acos(dot)
+    return ang / CORNER_LOOKAHEAD
+  }
+  const updateCorner = (
+    t: number,
+    offset: number,
+    crashed: boolean,
+  ): void => {
+    const kappa = sampleCurvature(t)
+    if (!cornerState.inCorner) {
+      if (kappa > CORNER_KAPPA_ENTER) {
+        cornerState.inCorner = true
+        cornerState.crashedThisCorner = crashed
+        cornerState.wideThisCorner = false
+        if (!cornerState.firstCornerPlayed) {
+          world.commentary.trigger('first_corner', true)
+          cornerState.firstCornerPlayed = true
+        }
+      }
+    } else {
+      // While in the corner, watch for "running wide" or a crash.
+      if (offset > 7.0) cornerState.wideThisCorner = true
+      if (crashed) cornerState.crashedThisCorner = true
+      if (kappa < CORNER_KAPPA_EXIT) {
+        // Corner exit — emit one of two outcome clips.
+        if (cornerState.wideThisCorner) {
+          world.commentary.trigger('wide_corner')
+        } else if (!cornerState.crashedThisCorner) {
+          world.commentary.trigger('clean_corner')
+        }
+        cornerState.inCorner = false
+        cornerState.crashedThisCorner = false
+        cornerState.wideThisCorner = false
+      }
+    }
+  }
+  const resetCornerState = (): void => {
+    cornerState.inCorner = false
+    cornerState.firstCornerPlayed = false
+    cornerState.crashedThisCorner = false
+    cornerState.wideThisCorner = false
   }
 
   const ctx = createInitialContext()
@@ -317,6 +396,9 @@ function bootstrap(): void {
     enter: async () => {
       placeCarAtStart()
       spawnOpponents()
+      // Commentator kicks off the build-up.
+      world.commentary.unlock()
+      world.commentary.trigger('countdown', true)
       // Snap camera to chase position (4 m back, 2.2 m up) so the
       // countdown view doesn't lerp in from the MENU 3/4 orbit shot.
       accelLerp = 0
@@ -418,6 +500,10 @@ function bootstrap(): void {
       ctx.raceData.topSpeed = 0
       ctx.raceData.opponentHits = 0
       ctx.raceData.finalPosition = 0
+      world.commentary.resetRace()
+      world.commentary.unlock() // countdown click already happened
+      world.commentary.trigger('race_start', true)
+      resetCornerState()
     },
     update: (_, dt) => {
       if (!world.input) return
@@ -504,6 +590,24 @@ function bootstrap(): void {
       }
       if (world.opponentCars) world.opponentCars.update(world.opponents)
 
+      // --- Commentary feed: build a snapshot for the auto-detector.
+      const _rank = computePosition()
+      const _proj = track.projectToTrack(physics.state.pos)
+      updateCorner(_proj.t, _proj.offset, physics.state.crashed)
+      world.commentary.update({
+        time: performance.now(),
+        raceState: 'running',
+        speed: physics.state.speed,
+        steeringAbs: Math.abs(inp.steer),
+        trackOffset: _proj.offset,
+        offTrack: physics.state.crashed,
+        crashCount: ctx.raceData.crashes + ctx.raceData.opponentHits,
+        lapProgress: physics.state.lapProgress,
+        lapCount: physics.state.lapsCompleted,
+        position: _rank.position,
+        fieldSize: _rank.fieldSize,
+      })
+
       // HUD
       const lapMs = performance.now() - ctx.raceData.startTime
       const rank = computePosition()
@@ -535,6 +639,13 @@ function bootstrap(): void {
   sm.register(GameState.FINISH, {
     enter: async () => {
       SFX.finishHorn()
+      world.commentary.trigger('finish_line', true)
+      // Tail-end commentary depends on outcome (P1, podium, messy, etc.).
+      world.commentary.triggerFinishOutcome({
+        position: ctx.raceData.finalPosition || world.opponents.length + 1,
+        fieldSize: world.opponents.length + 1,
+        crashes: ctx.raceData.crashes + ctx.raceData.opponentHits,
+      })
       triggerShake(0.3, 0.6)
       hud.flash('FINISH!', '#00d2be', 1200)
       await new Promise<void>((res) => setTimeout(res, 1500))
@@ -605,6 +716,7 @@ function bootstrap(): void {
   // ---------------- Loop ----------------
   const loop = new GameLoop((dt) => {
     sm.update(dt)
+    track.updateAtmosphere(dt)
     bundle.updateShadowFollow(physics.state.pos)
     if (world.audio) {
       const inp = world.input?.getInput()

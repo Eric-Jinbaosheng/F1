@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(./node_modules/.bin/vite build *)",
-      "Bash(./node_modules/.bin/vite)"
+      "Bash(./node_modules/.bin/vite)",
+      "Bash(awk '{sum+=$5} END {printf \"Total bytes: %d  ≈ %.2f MB\\\\n\", sum, sum/1024/1024}')",
+      "Bash(ffmpeg -version)"
+    ],
+    "additionalDirectories": [
+      "/Users/jinbaosheng/Downloads/commenter_tts_31"
     ]
   }
 }

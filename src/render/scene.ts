@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WeatherPreset } from './weather'
 
 export interface SceneBundle {
   scene: THREE.Scene
@@ -8,6 +9,8 @@ export interface SceneBundle {
   /** Call each frame with the player car's world position so the shadow
    *  camera frustum stays centred on it for crisp local shadows. */
   updateShadowFollow: (worldPos: THREE.Vector3) => void
+  /** Re-tint sky / fog / sun / hemi from a weather preset. */
+  applyWeather: (preset: WeatherPreset) => void
   resize: () => void
   render: () => void
   dispose: () => void
@@ -115,6 +118,27 @@ export function createScene(container: HTMLElement): SceneBundle {
   skyTex.dispose()
   pmrem.dispose()
 
+  const applyWeather = (preset: WeatherPreset): void => {
+    if (scene.background instanceof THREE.Color) {
+      scene.background.set(preset.sky)
+    } else {
+      scene.background = new THREE.Color(preset.sky)
+    }
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color.set(preset.fogColor)
+      scene.fog.near = preset.fogNear
+      scene.fog.far = preset.fogFar
+    } else {
+      scene.fog = new THREE.Fog(preset.fogColor, preset.fogNear, preset.fogFar)
+    }
+    sun.color.set(preset.sunColor)
+    sun.intensity = preset.sunIntensity
+    hemi.color.set(preset.hemiSky)
+    hemi.groundColor.set(preset.hemiGround)
+    hemi.intensity = preset.hemiIntensity
+    renderer.toneMappingExposure = preset.exposure
+  }
+
   const updateShadowFollow = (worldPos: THREE.Vector3): void => {
     // Re-centre the shadow camera frustum on the player so its 100×100 m
     // window of high-res shadow always contains the car + nearby road.
@@ -147,5 +171,5 @@ export function createScene(container: HTMLElement): SceneBundle {
   window.addEventListener('resize', resize)
   window.addEventListener('orientationchange', resize)
 
-  return { scene, camera, renderer, sun, updateShadowFollow, resize, render, dispose }
+  return { scene, camera, renderer, sun, applyWeather, updateShadowFollow, resize, render, dispose }
 }

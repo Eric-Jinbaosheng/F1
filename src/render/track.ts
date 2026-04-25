@@ -2,6 +2,7 @@ import * as THREE from 'three'
 // Inlined as a base64 data URL by Vite (assetsInlineLimit = 100 MB) so the
 // final bundle is fully offline — no fetch / XHR at runtime.
 import shanghaiEnvUrl from '../assets/textures/shanghai_environment.png?url'
+import type { WeatherPreset } from './weather'
 
 const ROAD_HALF_WIDTH = 7 // 14 m total = SIC spec
 const KERB_WIDTH = 2.0
@@ -19,6 +20,43 @@ const ENV_ALIGNMENT = {
   yaw: 0,
   scale: 1,
   flipY: false,
+}
+
+// --- Distant skyline / landmark cluster ----------------------------------
+// Tunable knobs for the far-background "Shanghai-inspired" horizon. These
+// drive PART 4–7 helpers below; tweak rather than touching the helpers.
+
+const SKYLINE_ENABLED = true
+
+const SKYLINE_CONFIG = {
+  northZ: -880,
+  southZ: 900,
+  eastX: 1000,
+  westX: -1000,
+  baseY: 0,
+  hazeColor: '#b8c6d8',
+  hazeOpacity: 0.18,
+}
+
+const LANDMARK_CONFIG = {
+  enabled: true,
+  x: 180,
+  y: 0,
+  z: -900,
+  scale: 1.0,
+  yaw: 0,
+}
+
+const SKYLINE_COLORS = {
+  farDark: '#111820',
+  farMid: '#18212b',
+  farLight: '#222d38',
+  landmark: '#101720',
+  landmarkAccent: '#172230',
+  glassDark: '#182635',
+  warmWindow: '#ffd36a',
+  redBeacon: '#ff3b30',
+  haze: '#b8c6d8',
 }
 
 // Hand-placed SIC silhouette traced from the official Wikipedia track-map
@@ -112,6 +150,11 @@ export interface TrackBundle {
   getTangentAt: (t: number) => THREE.Vector3
   /** Returns shortest arc-length parameter (0..1) on track for a world point. */
   projectToTrack: (worldPos: THREE.Vector3) => { t: number; offset: number; closest: THREE.Vector3 }
+  /** Drives time-based environment animation (drifting clouds, etc.). Call
+   *  every frame from the main loop with dt in seconds. */
+  updateAtmosphere: (dt: number) => void
+  /** Re-tint clouds + horizon haze from a weather preset. */
+  applyWeather: (preset: WeatherPreset) => void
   dispose: () => void
 }
 
@@ -207,15 +250,6 @@ function makeBox(
   mesh.castShadow = true
   mesh.receiveShadow = true
   return mesh
-}
-
-// Deterministic pseudo-random, so skyline layout is stable between reloads.
-function rand(seed: number): () => number {
-  let s = seed >>> 0
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0
-    return s / 0xffffffff
-  }
 }
 
 // --- Environment ground --------------------------------------------------
@@ -641,82 +675,592 @@ function addPitAndGrandstand(
   ))
 }
 
-// --- Distant skyline / industrial silhouettes ----------------------------
+// --- Distant skyline ------------------------------------------------------
+// Far-background city silhouette. Uses MeshBasicMaterial so it stays
+// readable regardless of scene lighting (unlit silhouettes feel "distant"
+// against any sky colour). Deterministic seeded layout so every reload
+// shows the same horizon.
 
-function addDistantSkyline(group: THREE.Group, d: Disposables): void {
-  const skyMat1 = new THREE.MeshStandardMaterial({ color: '#0d1218', roughness: 1, metalness: 0 })
-  const skyMat2 = new THREE.MeshStandardMaterial({ color: '#151b22', roughness: 1, metalness: 0 })
-  const skyMat3 = new THREE.MeshStandardMaterial({ color: '#1a2028', roughness: 1, metalness: 0 })
-  const craneMat = new THREE.MeshStandardMaterial({
-    color: '#2a323a',
-    roughness: 0.7,
-    metalness: 0.4,
-  })
-  const dotMat = new THREE.MeshStandardMaterial({
-    color: '#ff5050',
-    emissive: '#ff3030',
-    emissiveIntensity: 1.2,
-    roughness: 0.8,
-    metalness: 0,
-  })
-  d.materials.push(skyMat1, skyMat2, skyMat3, craneMat, dotMat)
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 999.123) * 10000
+  return x - Math.floor(x)
+}
 
-  const mats = [skyMat1, skyMat2, skyMat3]
-  const rng = rand(0xC1A0D5)
-
-  const edges: Array<{ axis: 'x' | 'z'; fixed: number; range: [number, number] }> = [
-    { axis: 'z', fixed: -540, range: [-820, 820] },
-    { axis: 'z', fixed: 540, range: [-820, 820] },
-    { axis: 'x', fixed: -820, range: [-540, 540] },
-    { axis: 'x', fixed: 820, range: [-540, 540] },
+function addProceduralSkyline(group: THREE.Group, d: Disposables): void {
+  // White base material + per-instance colour: 460+ buildings collapse to
+  // a single draw call regardless of palette variety.
+  const skylineMat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+  d.materials.push(skylineMat)
+  const palette = [
+    new THREE.Color(SKYLINE_COLORS.farDark),
+    new THREE.Color(SKYLINE_COLORS.farMid),
+    new THREE.Color(SKYLINE_COLORS.farLight),
   ]
 
-  let placed = 0
-  const target = 42
-  while (placed < target) {
-    const edge = edges[placed % edges.length]
-    const along = edge.range[0] + rng() * (edge.range[1] - edge.range[0])
-    const jitter = (rng() - 0.5) * 30
-    const h = 15 + rng() * 65
-    const w = 18 + rng() * 40
-    const dpt = 18 + rng() * 40
-    const mat = mats[Math.floor(rng() * mats.length)]
-    const pos = new THREE.Vector3()
-    if (edge.axis === 'z') {
-      pos.set(along, h / 2, edge.fixed + jitter)
-    } else {
-      pos.set(edge.fixed + jitter, h / 2, along)
+  const unitBox = new THREE.BoxGeometry(1, 1, 1)
+  d.geometries.push(unitBox)
+
+  // First pass collects every instance spec from all four cardinal bands;
+  // second pass uploads them into a single InstancedMesh.
+  const specs: Array<{
+    pos: THREE.Vector3
+    scale: THREE.Vector3
+    color: THREE.Color
+  }> = []
+
+  // Place a dense main ribbon along one cardinal edge plus a sparser, taller
+  // back layer pushed slightly further outward (depth gradient effect).
+  const collectBand = (
+    axis: 'x' | 'z',     // axis the buildings spread ALONG
+    fixed: number,       // coordinate on the perpendicular axis
+    range: [number, number],
+    backwardSign: 1 | -1,
+    seedBase: number,
+  ): void => {
+    // --- Main ribbon: dense, varied palette.
+    let cursor = range[0]
+    let i = 0
+    while (cursor < range[1] && i < 80) {
+      const r1 = seededRandom(seedBase + i * 3 + 1)
+      const r2 = seededRandom(seedBase + i * 3 + 2)
+      const r3 = seededRandom(seedBase + i * 3 + 3)
+      const w = 18 + r1 * 38
+      const h = 22 + r2 * 90
+      const dp = 20 + r3 * 28
+      const along = cursor + w / 2
+      const perp = fixed + (r3 - 0.5) * 22
+      const pos = new THREE.Vector3(
+        axis === 'x' ? along : perp,
+        h / 2,
+        axis === 'x' ? perp : along,
+      )
+      const colour = palette[Math.floor(r1 * palette.length) % palette.length]
+      specs.push({ pos, scale: new THREE.Vector3(w, h, dp), color: colour.clone() })
+      cursor += w + 4 + r2 * 12
+      i++
     }
-    group.add(makeBox(`skyline-${placed}`, new THREE.Vector3(w, h, dpt), pos, rng() * Math.PI * 2, mat, d))
-    placed++
+    // --- Back layer: taller, lighter tone, pushed ~70 m further outward.
+    cursor = range[0] + 20
+    let j = 0
+    const perpBack = fixed + backwardSign * 70
+    while (cursor < range[1] && j < 35) {
+      const r1 = seededRandom(seedBase + j * 7 + 211)
+      const r2 = seededRandom(seedBase + j * 7 + 213)
+      const w = 32 + r1 * 50
+      const h = 35 + r2 * 80
+      const along = cursor + w / 2
+      const pos = new THREE.Vector3(
+        axis === 'x' ? along : perpBack,
+        h / 2,
+        axis === 'x' ? perpBack : along,
+      )
+      specs.push({ pos, scale: new THREE.Vector3(w, h, 28), color: palette[2].clone() })
+      cursor += w + 18 + r1 * 14
+      j++
+    }
   }
 
-  const craneCount = 4
+  // Four cardinal bands — same density everywhere so the horizon never
+  // goes bare regardless of which way the player faces.
+  collectBand('x', SKYLINE_CONFIG.northZ, [-900, 900], -1, 0)
+  collectBand('x', SKYLINE_CONFIG.southZ, [-900, 900], 1, 1000)
+  collectBand('z', SKYLINE_CONFIG.eastX, [-540, 540], 1, 2000)
+  collectBand('z', SKYLINE_CONFIG.westX, [-540, 540], -1, 3000)
+
+  const im = new THREE.InstancedMesh(unitBox, skylineMat, specs.length)
+  im.name = 'skyline-instanced'
+  const dummy = new THREE.Object3D()
+  for (let i = 0; i < specs.length; i++) {
+    const s = specs[i]
+    dummy.position.copy(s.pos)
+    dummy.scale.copy(s.scale)
+    dummy.rotation.set(0, 0, 0)
+    dummy.updateMatrix()
+    im.setMatrixAt(i, dummy.matrix)
+    im.setColorAt(i, s.color)
+  }
+  im.instanceMatrix.needsUpdate = true
+  if (im.instanceColor) im.instanceColor.needsUpdate = true
+  group.add(im)
+}
+
+// --- Shanghai-inspired landmark cluster ----------------------------------
+
+function buildOrientalPearlInspired(d: Disposables, mat: THREE.Material, beaconMat: THREE.Material): THREE.Group {
+  const grp = new THREE.Group()
+  grp.name = 'pearl-inspired'
+  // Vertical layout chosen so each segment hands off cleanly to the next:
+  //   base   y [  0,  28]  (radius 4 → 2.2)
+  //   lo-sph y [ 27,  53]  (r 13)        — passes through the shaft, intentional
+  //   mid    y [ 52,  85]
+  //   mi-sph y [ 85,  99]  (r 7)
+  //   upper  y [ 98, 145]
+  //   top-sp y [144, 152]  (r 4)
+  //   antenna y[152, 200]
+  //   beacon y [200, 203]
+  // Total ≈ 203 m, no double-stacked cylinders.
+  const baseGeo = new THREE.CylinderGeometry(2.2, 4.0, 28, 8)
+  const midShaft = new THREE.CylinderGeometry(1.5, 1.5, 33, 8)
+  const upperShaft = new THREE.CylinderGeometry(1.0, 1.2, 47, 8)
+  const lowerSphere = new THREE.SphereGeometry(13, 16, 12)
+  const midSphere = new THREE.SphereGeometry(7, 14, 10)
+  const topSphere = new THREE.SphereGeometry(4, 12, 8)
+  const antenna = new THREE.CylinderGeometry(0.15, 0.8, 48, 6)
+  const beacon = new THREE.SphereGeometry(1.5, 8, 6)
+  d.geometries.push(baseGeo, midShaft, upperShaft, lowerSphere, midSphere, topSphere, antenna, beacon)
+
+  const base = new THREE.Mesh(baseGeo, mat); base.position.y = 14; grp.add(base)
+  const lo = new THREE.Mesh(lowerSphere, mat); lo.position.y = 40; grp.add(lo)
+  const mid = new THREE.Mesh(midShaft, mat); mid.position.y = 68.5; grp.add(mid)
+  const ms = new THREE.Mesh(midSphere, mat); ms.position.y = 92; grp.add(ms)
+  const up = new THREE.Mesh(upperShaft, mat); up.position.y = 121.5; grp.add(up)
+  const top = new THREE.Mesh(topSphere, mat); top.position.y = 148; grp.add(top)
+  const ant = new THREE.Mesh(antenna, mat); ant.position.y = 176; grp.add(ant)
+  const bcn = new THREE.Mesh(beacon, beaconMat); bcn.position.y = 201.5; grp.add(bcn)
+  return grp
+}
+
+function buildShanghaiTowerInspired(d: Disposables, mat: THREE.Material, unitBox: THREE.BoxGeometry): THREE.Group {
+  const grp = new THREE.Group()
+  grp.name = 'shanghai-tower-inspired'
+  // 8 stacked boxes, each slightly narrower and rotated a touch — fakes
+  // the famous twist silhouette without expensive geometry.
+  void d // shared unitBox is already in disposables
+  const segH = 26
+  for (let s = 0; s < 8; s++) {
+    const w = 32 - s * 1.7
+    const dp = 28 - s * 1.3
+    const m = new THREE.Mesh(unitBox, mat)
+    m.scale.set(w, segH, dp)
+    m.position.y = segH / 2 + s * segH
+    m.rotation.y = s * 0.05
+    grp.add(m)
+  }
+  // Top cap.
+  const cap = new THREE.Mesh(unitBox, mat)
+  cap.scale.set(8, 8, 8)
+  cap.position.y = 8 * 26 + 4
+  grp.add(cap)
+  return grp
+}
+
+function buildSWFCInspired(mat: THREE.Material, glassMat: THREE.Material, unitBox: THREE.BoxGeometry): THREE.Group {
+  const grp = new THREE.Group()
+  grp.name = 'swfc-inspired'
+  // Tall slab + a thin sky-tone strip near the top to suggest the famous
+  // trapezoidal aperture without actually cutting geometry.
+  const slab = new THREE.Mesh(unitBox, mat)
+  slab.scale.set(30, 185, 22)
+  slab.position.y = 92.5
+  grp.add(slab)
+  const ap = new THREE.Mesh(unitBox, glassMat)
+  ap.scale.set(18, 8, 23)
+  ap.position.set(0, 168, 0)
+  grp.add(ap)
+  return grp
+}
+
+function buildJinMaoInspired(mat: THREE.Material, unitBox: THREE.BoxGeometry): THREE.Group {
+  const grp = new THREE.Group()
+  grp.name = 'jin-mao-inspired'
+  // 7 stepped tiers: stepped pagoda silhouette.
+  const totalH = 170
+  const tiers = 7
+  const tierH = totalH / tiers
+  let yCursor = 0
+  for (let s = 0; s < tiers; s++) {
+    const w = 28 - s * 2.8
+    const dp = 28 - s * 2.8
+    const m = new THREE.Mesh(unitBox, mat)
+    m.scale.set(w, tierH, dp)
+    m.position.y = yCursor + tierH / 2
+    grp.add(m)
+    yCursor += tierH
+  }
+  // Antenna spire on top.
+  const spireGeo = new THREE.ConeGeometry(0.6, 22, 6)
+  const spire = new THREE.Mesh(spireGeo, mat)
+  spire.position.y = totalH + 11
+  grp.add(spire)
+  return grp
+}
+
+function addShanghaiLandmarkCluster(group: THREE.Group, d: Disposables): void {
+  const landmarkMat = new THREE.MeshBasicMaterial({ color: SKYLINE_COLORS.landmark })
+  const accentMat = new THREE.MeshBasicMaterial({ color: SKYLINE_COLORS.landmarkAccent })
+  const glassMat = new THREE.MeshBasicMaterial({ color: SKYLINE_COLORS.glassDark })
+  const beaconMat = new THREE.MeshStandardMaterial({
+    color: SKYLINE_COLORS.redBeacon,
+    emissive: SKYLINE_COLORS.redBeacon,
+    emissiveIntensity: 1.5,
+    roughness: 1,
+    metalness: 0,
+  })
+  d.materials.push(landmarkMat, accentMat, glassMat, beaconMat)
+
+  const sharedUnit = new THREE.BoxGeometry(1, 1, 1)
+  d.geometries.push(sharedUnit)
+
+  const cluster = new THREE.Group()
+  cluster.name = 'shanghai-landmark-cluster'
+  cluster.position.set(LANDMARK_CONFIG.x, LANDMARK_CONFIG.y, LANDMARK_CONFIG.z)
+  cluster.rotation.y = LANDMARK_CONFIG.yaw
+  cluster.scale.setScalar(LANDMARK_CONFIG.scale)
+
+  const pearl = buildOrientalPearlInspired(d, landmarkMat, beaconMat)
+  pearl.position.set(-90, 0, 0)
+  cluster.add(pearl)
+
+  const tower = buildShanghaiTowerInspired(d, accentMat, sharedUnit)
+  tower.position.set(0, 0, -10)
+  cluster.add(tower)
+
+  const swfc = buildSWFCInspired(landmarkMat, glassMat, sharedUnit)
+  swfc.position.set(60, 0, 5)
+  cluster.add(swfc)
+
+  const jin = buildJinMaoInspired(landmarkMat, sharedUnit)
+  jin.position.set(105, 0, 8)
+  cluster.add(jin)
+
+  // A handful of generic supporting blocks fanned around the icons so the
+  // cluster reads as a downtown massing, not 4 isolated towers.
+  const fillerCount = 14
+  for (let i = 0; i < fillerCount; i++) {
+    const r1 = seededRandom(i * 11 + 7)
+    const r2 = seededRandom(i * 11 + 9)
+    const r3 = seededRandom(i * 11 + 13)
+    const fx = -180 + r1 * 360
+    // Keep filler buildings clear of the marquee landmarks (skip an x band
+    // where the icons live).
+    if (fx > -25 && fx < 130) continue
+    const fz = -30 + (r2 - 0.5) * 50
+    const fw = 18 + r3 * 22
+    const fdp = 18 + r1 * 22
+    const fh = 60 + r2 * 90
+    const m = new THREE.Mesh(sharedUnit, i % 2 === 0 ? landmarkMat : accentMat)
+    m.scale.set(fw, fh, fdp)
+    m.position.set(fx, fh / 2, fz)
+    cluster.add(m)
+  }
+
+  group.add(cluster)
+}
+
+// --- Bridge / harbor / industrial silhouettes ----------------------------
+
+function addHarborAndBridgeSilhouettes(group: THREE.Group, d: Disposables): void {
+  const craneMat = new THREE.MeshBasicMaterial({ color: '#151b22' })
+  const beaconMat = new THREE.MeshStandardMaterial({
+    color: SKYLINE_COLORS.redBeacon,
+    emissive: SKYLINE_COLORS.redBeacon,
+    emissiveIntensity: 1.5,
+    roughness: 1,
+    metalness: 0,
+  })
+  d.materials.push(craneMat, beaconMat)
+
+  const unit = new THREE.BoxGeometry(1, 1, 1)
+  d.geometries.push(unit)
+
+  // --- Long bridge silhouette across the south horizon.
+  const bridgeZ = SKYLINE_CONFIG.southZ - 30
+  const deck = new THREE.Mesh(unit, craneMat)
+  deck.scale.set(700, 3, 4)
+  deck.position.set(0, 35, bridgeZ)
+  group.add(deck)
+  // Two main pylons.
+  for (const px of [-220, 220]) {
+    const pylon = new THREE.Mesh(unit, craneMat)
+    pylon.scale.set(5, 90, 5)
+    pylon.position.set(px, 45, bridgeZ)
+    group.add(pylon)
+    const top = new THREE.Mesh(unit, craneMat)
+    top.scale.set(8, 4, 8)
+    top.position.set(px, 92, bridgeZ)
+    group.add(top)
+  }
+  // Stepping pillars under the deck.
+  for (let i = -5; i <= 5; i++) {
+    if (i === -2 || i === 2) continue // skip where the pylons live
+    const piece = new THREE.Mesh(unit, craneMat)
+    piece.scale.set(3, 30, 3)
+    piece.position.set(i * 70, 17.5, bridgeZ)
+    group.add(piece)
+  }
+
+  // --- 5 harbor cranes along the east edge.
+  const craneCount = 5
   for (let i = 0; i < craneCount; i++) {
-    const z = -300 + i * 200
-    const baseX = 780
+    const z = -260 + i * 130
+    const baseX = SKYLINE_CONFIG.eastX - 60
 
-    const towerPos = new THREE.Vector3(baseX, 35, z)
-    group.add(makeBox(`crane-tower-${i}`, new THREE.Vector3(2.5, 70, 2.5), towerPos, 0, craneMat, d))
+    const tower = new THREE.Mesh(unit, craneMat)
+    tower.scale.set(3, 45, 3)
+    tower.position.set(baseX, 22.5, z)
+    group.add(tower)
 
-    const boomPos = new THREE.Vector3(baseX - 18, 65, z)
-    group.add(makeBox(`crane-boom-${i}`, new THREE.Vector3(50, 1.8, 1.8), boomPos, 0, craneMat, d))
+    const boom = new THREE.Mesh(unit, craneMat)
+    boom.scale.set(55, 3, 3)
+    boom.position.set(baseX - 18, 44, z)
+    group.add(boom)
 
-    const supportPos = new THREE.Vector3(baseX - 9, 56, z)
-    const sup = makeBox(`crane-support-${i}`, new THREE.Vector3(28, 1, 1), supportPos, 0, craneMat, d)
-    sup.rotation.z = Math.PI / 6
-    group.add(sup)
+    const counter = new THREE.Mesh(unit, craneMat)
+    counter.scale.set(18, 5, 5)
+    counter.position.set(baseX + 12, 44, z)
+    group.add(counter)
 
-    const dotPos = new THREE.Vector3(baseX, 70.2, z)
-    group.add(makeBox(`crane-dot-${i}`, new THREE.Vector3(1.2, 1.2, 1.2), dotPos, 0, dotMat, d))
+    const support = new THREE.Mesh(unit, craneMat)
+    support.scale.set(45, 2, 2)
+    support.position.set(baseX - 14, 36, z)
+    support.rotation.z = Math.PI / 7
+    group.add(support)
+
+    const dot = new THREE.Mesh(unit, beaconMat)
+    dot.scale.set(1.4, 1.4, 1.4)
+    dot.position.set(baseX, 47, z)
+    group.add(dot)
   }
 
-  const bridgePos = new THREE.Vector3(0, 22, -550)
-  group.add(makeBox('bridge-deck', new THREE.Vector3(900, 2, 4), bridgePos, 0, craneMat, d))
-  for (let i = 0; i < 7; i++) {
-    const x = -420 + i * 140
-    const pylonPos = new THREE.Vector3(x, 14, -550)
-    group.add(makeBox(`bridge-pylon-${i}`, new THREE.Vector3(2.5, 28, 2.5), pylonPos, 0, craneMat, d))
+  // --- A few low industrial warehouse blocks along the same edge.
+  for (let i = 0; i < 8; i++) {
+    const r1 = seededRandom(i * 17 + 5)
+    const r2 = seededRandom(i * 17 + 11)
+    const z = -380 + i * 95 + (r1 - 0.5) * 30
+    const w = 38 + r2 * 30
+    const h = 9 + r1 * 8
+    const block = new THREE.Mesh(unit, craneMat)
+    block.scale.set(w, h, 22)
+    block.position.set(SKYLINE_CONFIG.eastX - 130, h / 2, z)
+    group.add(block)
+  }
+}
+
+// --- Moon + stars (night only) -------------------------------------------
+
+interface CelestialController {
+  setVisible: (visible: boolean) => void
+}
+
+function addCelestialBodies(group: THREE.Group, d: Disposables): CelestialController {
+  const root = new THREE.Group()
+  root.name = 'celestial'
+  root.visible = false // weather.applyWeather() flips this on at night
+
+  // --- Moon: bright sphere parked far above the western horizon.
+  const moonGeo = new THREE.SphereGeometry(40, 24, 18)
+  d.geometries.push(moonGeo)
+  const moonMat = new THREE.MeshBasicMaterial({ color: '#f5f0d8' })
+  d.materials.push(moonMat)
+  const moon = new THREE.Mesh(moonGeo, moonMat)
+  moon.position.set(-450, 700, -780)
+  root.add(moon)
+
+  // Soft halo behind it — back-side sphere with low opacity.
+  const haloGeo = new THREE.SphereGeometry(70, 16, 12)
+  d.geometries.push(haloGeo)
+  const haloMat = new THREE.MeshBasicMaterial({
+    color: '#cfdcf4',
+    transparent: true,
+    opacity: 0.18,
+    depthWrite: false,
+    side: THREE.BackSide,
+  })
+  d.materials.push(haloMat)
+  const halo = new THREE.Mesh(haloGeo, haloMat)
+  halo.position.copy(moon.position)
+  root.add(halo)
+
+  // --- Stars: 800 points scattered across a 1100-radius dome above the
+  // horizon. Single Points draw call.
+  const STAR_COUNT = 800
+  const positions = new Float32Array(STAR_COUNT * 3)
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const r1 = seededRandom(i * 31 + 1)
+    const r2 = seededRandom(i * 31 + 2)
+    const theta = r1 * Math.PI * 2
+    // phi ∈ [acos(0.9), acos(0.05)] keeps stars in the upper sky band.
+    const phi = Math.acos(0.05 + r2 * 0.85)
+    const radius = 1100
+    positions[i * 3 + 0] = radius * Math.sin(phi) * Math.cos(theta)
+    positions[i * 3 + 1] = radius * Math.cos(phi)
+    positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta)
+  }
+  const starGeo = new THREE.BufferGeometry()
+  starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  d.geometries.push(starGeo)
+  const starMat = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 5,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+  })
+  d.materials.push(starMat)
+  const stars = new THREE.Points(starGeo, starMat)
+  root.add(stars)
+
+  group.add(root)
+  return {
+    setVisible: (v) => {
+      root.visible = v
+    },
+  }
+}
+
+// --- Drifting clouds -----------------------------------------------------
+
+interface CloudController {
+  update: (dt: number) => void
+  setTint: (color: string, opacity: number) => void
+}
+
+function addClouds(group: THREE.Group, d: Disposables): CloudController {
+  // Low-poly sphere reused for every "puff". 8×6 = 48 tris, plenty for
+  // sky-distance.
+  const sphereGeo = new THREE.SphereGeometry(1, 8, 6)
+  d.geometries.push(sphereGeo)
+
+  // Soft white, slightly translucent so clouds blend with the sky and
+  // never read as hard chalk.
+  const cloudMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  })
+  d.materials.push(cloudMat)
+
+  const CLOUD_COUNT = 40
+  const PUFFS_PER_CLOUD = 6
+  const TOTAL = CLOUD_COUNT * PUFFS_PER_CLOUD
+
+  const im = new THREE.InstancedMesh(sphereGeo, cloudMat, TOTAL)
+  im.name = 'clouds'
+  im.renderOrder = 5 // after skyline so haze blends correctly
+  group.add(im)
+
+  // Per-cloud anchor — drifts with wind. Per-puff offsets fluff out the
+  // anchor into a multi-lobe shape.
+  interface Cloud { baseX: number; baseY: number; baseZ: number }
+  interface Puff { cloudIdx: number; offX: number; offY: number; offZ: number; scale: number }
+
+  const clouds: Cloud[] = []
+  const puffs: Puff[] = []
+
+  for (let c = 0; c < CLOUD_COUNT; c++) {
+    const r1 = seededRandom(c * 13 + 1)
+    const r2 = seededRandom(c * 13 + 2)
+    const r3 = seededRandom(c * 13 + 3)
+    clouds.push({
+      baseX: -1000 + r1 * 2000, // -1000..+1000
+      baseY: 220 + r2 * 180,    // 220..400 m up
+      baseZ: -1000 + r3 * 2000,
+    })
+    for (let p = 0; p < PUFFS_PER_CLOUD; p++) {
+      const pr1 = seededRandom(c * 100 + p * 7 + 1)
+      const pr2 = seededRandom(c * 100 + p * 7 + 2)
+      const pr3 = seededRandom(c * 100 + p * 7 + 3)
+      const pr4 = seededRandom(c * 100 + p * 7 + 4)
+      puffs.push({
+        cloudIdx: c,
+        offX: (pr1 - 0.5) * 80,
+        offY: (pr2 - 0.5) * 14,
+        offZ: (pr3 - 0.5) * 50,
+        scale: 14 + pr4 * 16, // 14..30 m radius
+      })
+    }
+  }
+
+  const WIND_SPEED = 6 // m/s along +X
+  const WRAP_X = 1100  // teleport back when drifting beyond this
+  const span = WRAP_X * 2
+
+  const dummy = new THREE.Object3D()
+  let totalTime = 0
+
+  const recompute = (): void => {
+    for (let i = 0; i < puffs.length; i++) {
+      const p = puffs[i]
+      const c = clouds[p.cloudIdx]
+      // Wrapped x position so clouds loop instead of disappearing.
+      let cx = c.baseX + WIND_SPEED * totalTime
+      cx = ((cx + WRAP_X) % span + span) % span - WRAP_X
+
+      dummy.position.set(cx + p.offX, c.baseY + p.offY, c.baseZ + p.offZ)
+      dummy.scale.setScalar(p.scale)
+      dummy.rotation.set(0, 0, 0)
+      dummy.updateMatrix()
+      im.setMatrixAt(i, dummy.matrix)
+    }
+    im.instanceMatrix.needsUpdate = true
+  }
+  recompute()
+
+  return {
+    update: (dt: number) => {
+      totalTime += dt
+      recompute()
+    },
+    setTint: (color: string, opacity: number) => {
+      cloudMat.color.set(color)
+      cloudMat.opacity = opacity
+      cloudMat.needsUpdate = true
+    },
+  }
+}
+
+// --- Horizon haze / atmospheric blending ---------------------------------
+
+interface HazeController {
+  setColor: (color: string) => void
+}
+
+function addHorizonHaze(group: THREE.Group, d: Disposables): HazeController {
+  // Big translucent planes parallel to the four edges, sitting just behind
+  // the skyline. Cheap fog impression that doesn't depend on scene.fog.
+  const hazeMat = new THREE.MeshBasicMaterial({
+    color: SKYLINE_CONFIG.hazeColor,
+    transparent: true,
+    opacity: SKYLINE_CONFIG.hazeOpacity,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  d.materials.push(hazeMat)
+
+  const planeGeo = new THREE.PlaneGeometry(2400, 280)
+  d.geometries.push(planeGeo)
+
+  // North haze (most visible from the start straight).
+  const north = new THREE.Mesh(planeGeo, hazeMat)
+  north.position.set(0, 110, SKYLINE_CONFIG.northZ - 80)
+  north.renderOrder = -1
+  group.add(north)
+
+  const south = new THREE.Mesh(planeGeo, hazeMat)
+  south.position.set(0, 110, SKYLINE_CONFIG.southZ + 80)
+  south.rotation.y = Math.PI
+  south.renderOrder = -1
+  group.add(south)
+
+  const east = new THREE.Mesh(planeGeo, hazeMat)
+  east.position.set(SKYLINE_CONFIG.eastX + 80, 110, 0)
+  east.rotation.y = -Math.PI / 2
+  east.renderOrder = -1
+  group.add(east)
+
+  const west = new THREE.Mesh(planeGeo, hazeMat)
+  west.position.set(SKYLINE_CONFIG.westX - 80, 110, 0)
+  west.rotation.y = Math.PI / 2
+  west.renderOrder = -1
+  group.add(west)
+
+  return {
+    setColor: (color: string) => {
+      hazeMat.color.set(color)
+      hazeMat.needsUpdate = true
+    },
   }
 }
 
@@ -784,13 +1328,26 @@ function addTracksideEnvironment(
   group: THREE.Group,
   curve: THREE.Curve<THREE.Vector3>,
   d: Disposables,
-): void {
+): {
+  clouds: CloudController
+  haze: HazeController | null
+  celestial: CelestialController
+} {
   addBarriers(group, curve, d)
   addFences(group, curve, d)
   addLightPoles(group, curve, d)
   addPitAndGrandstand(group, curve, d)
   addServiceBuildings(group, curve, d)
-  addDistantSkyline(group, d)
+  let haze: HazeController | null = null
+  if (SKYLINE_ENABLED) {
+    addProceduralSkyline(group, d)
+    if (LANDMARK_CONFIG.enabled) addShanghaiLandmarkCluster(group, d)
+    addHarborAndBridgeSilhouettes(group, d)
+    haze = addHorizonHaze(group, d)
+  }
+  const clouds = addClouds(group, d)
+  const celestial = addCelestialBodies(group, d)
+  return { clouds, haze, celestial }
 }
 
 // --- Main entry point ----------------------------------------------------
@@ -913,7 +1470,7 @@ export function createTrack(): TrackBundle {
   // --- Environment ground (satellite-style backdrop) + 2.5D scenery.
   const envGroup = createEnvironmentGround(disposables)
   group.add(envGroup)
-  addTracksideEnvironment(group, curve, disposables)
+  const { clouds, haze, celestial } = addTracksideEnvironment(group, curve, disposables)
 
   console.log('[track] environment texture:', ENV_TEXTURE_PATH)
   console.log('[track] ENV_ALIGNMENT:', ENV_ALIGNMENT)
@@ -976,6 +1533,12 @@ export function createTrack(): TrackBundle {
     getPositionAt: (t: number) => curve.getPointAt(((t % 1) + 1) % 1),
     getTangentAt: (t: number) => curve.getTangentAt(((t % 1) + 1) % 1),
     projectToTrack,
+    updateAtmosphere: clouds.update,
+    applyWeather: (preset) => {
+      clouds.setTint(preset.cloudColor, preset.cloudOpacity)
+      haze?.setColor(preset.hazeColor)
+      celestial.setVisible(preset.nightMode === true)
+    },
     dispose: () => {
       geom.dispose()
       roadMat.dispose()
