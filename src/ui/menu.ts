@@ -6,6 +6,8 @@ import type { InputMode } from '../input'
 export interface MenuStartConfig {
   difficulty: Difficulty
   inputMode: InputMode
+  /** Whether AI race-commentary clips should play during the race. */
+  commentaryEnabled: boolean
 }
 
 export interface MenuController {
@@ -23,6 +25,12 @@ const INPUT_LABELS: Record<InputMode, { label: string; tag: string }> = {
   keyboard: { label: '键 盘', tag: 'WASD/方向键' },
   touch: { label: '触 屏', tag: '左右半屏' },
   gyro: { label: '体 感', tag: '倾斜手机' },
+}
+
+type Commentary = 'on' | 'off'
+const COMMENTARY_LABELS: Record<Commentary, { label: string; tag: string }> = {
+  on: { label: '开 启', tag: 'AI 解说员' },
+  off: { label: '关 闭', tag: '安静比赛' },
 }
 
 const isCoarsePointer = (): boolean => {
@@ -112,6 +120,7 @@ export function createMenu(): MenuController {
 
     let chosenDiff: Difficulty = 'medium'
     let chosenInput: InputMode = isCoarsePointer() ? 'touch' : 'keyboard'
+    let chosenCommentary: Commentary = 'on'
 
     const diffRow = makeRow(
       '难  度',
@@ -129,6 +138,14 @@ export function createMenu(): MenuController {
       (k) => { chosenInput = k as InputMode },
     )
 
+    const commentaryRow = makeRow(
+      '解  说',
+      ['on', 'off'],
+      COMMENTARY_LABELS as Record<string, { label: string; tag: string }>,
+      chosenCommentary,
+      (k) => { chosenCommentary = k as Commentary },
+    )
+
     const btn = document.createElement('button')
     btn.textContent = '开 始 比 赛'
     btn.style.cssText = `
@@ -139,7 +156,11 @@ export function createMenu(): MenuController {
       cursor: pointer;
     `
     btn.addEventListener('click', () => {
-      onStart({ difficulty: chosenDiff, inputMode: chosenInput })
+      onStart({
+        difficulty: chosenDiff,
+        inputMode: chosenInput,
+        commentaryEnabled: chosenCommentary === 'on',
+      })
     }, { once: true })
 
     const note = document.createElement('div')
@@ -155,6 +176,7 @@ export function createMenu(): MenuController {
     host.appendChild(sub)
     host.appendChild(diffRow)
     host.appendChild(inputRow)
+    host.appendChild(commentaryRow)
     host.appendChild(btn)
     host.appendChild(note)
     host.appendChild(bestEl)

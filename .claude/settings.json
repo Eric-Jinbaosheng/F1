@@ -4,7 +4,9 @@
       "Bash(./node_modules/.bin/vite build *)",
       "Bash(./node_modules/.bin/vite)",
       "Bash(awk '{sum+=$5} END {printf \"Total bytes: %d  ≈ %.2f MB\\\\n\", sum, sum/1024/1024}')",
-      "Bash(ffmpeg -version)"
+      "Bash(ffmpeg -version)",
+      "Read(//Users/jinbaosheng/Desktop/**)",
+      "Bash(ffprobe -v error -show_entries stream=width,height,duration,codec_name -of default=noprint_wrappers=1 /Users/jinbaosheng/Downloads/F1GAME/public/audio/commentary/beginning.mp4)"
     ],
     "additionalDirectories": [
       "/Users/jinbaosheng/Downloads/commenter_tts_31"

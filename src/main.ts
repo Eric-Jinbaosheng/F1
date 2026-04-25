@@ -13,6 +13,9 @@ import { StateMachine, GameState, createInitialContext } from './game/state'
 import { createMenu } from './ui/menu'
 import { createHud } from './ui/hud'
 import { createResult } from './ui/result'
+import { createIntro } from './ui/intro'
+import { createPersonalityCard } from './ui/personalityCard'
+import type { PlayerStats } from './racerPersonality'
 import { SFX, unlockAudio } from './audio/zzfx'
 import { createAudioRig, type AudioRig } from './audio/engine'
 import { CommentarySystem } from './audio/commentary'
@@ -188,6 +191,43 @@ function bootstrap(): void {
   hud.show() // visible from boot (kept on through MENU/RACE; only RESULT hides it)
   hud.update({ speedKmh: 0, lapMs: 0, mode: 'keyboard' })
   const result = createResult()
+  const personalityCard = createPersonalityCard()
+
+  /** Heuristic mapper: turn the data we actually collect during a race
+   *  into a 12-dimension PlayerStats input the personality matcher
+   *  understands. Missing dimensions stay near 50 (neutral). */
+  const buildPlayerStats = (): Partial<PlayerStats> => {
+    const fieldSize = world.opponents.length + 1
+    const pos = ctx.raceData.finalPosition || fieldSize
+    const positionScore = ((fieldSize - pos) / Math.max(1, fieldSize - 1)) * 100
+    const wallHits = ctx.raceData.crashes
+    const carHits = ctx.raceData.opponentHits
+    const totalHits = wallHits + carHits
+    // Top speed → 0..100. 200 km/h ≈ 30, 300 km/h ≈ 90, 320 km/h ≈ 100.
+    const topSpeedScore = Math.max(0, Math.min(100, (ctx.raceData.topSpeed - 180) * 0.7))
+    // Lap time → reference 80 s; 70 s = 100, 95 s = 0.
+    const lapSec = (ctx.raceData.bestLap ?? 0) / 1000
+    let lapScore = 50
+    if (lapSec > 0) lapScore = Math.max(0, Math.min(100, (95 - lapSec) * 4))
+    const cleanScore = Math.max(0, 100 - wallHits * 14 - carHits * 8)
+    return {
+      pace: Math.round(topSpeedScore * 0.55 + lapScore * 0.45),
+      consistency: Math.round(70 - totalHits * 4),
+      clean: Math.round(cleanScore),
+      cornering: Math.round(50 + topSpeedScore * 0.3 + (positionScore - 50) * 0.3),
+      braking: Math.round(50 + (cleanScore - 50) * 0.4 + (positionScore - 50) * 0.2),
+      racingLine: Math.round(50 + (cleanScore - 50) * 0.5 + (lapScore - 50) * 0.2),
+      attack: Math.round(40 + (positionScore - 50) * 0.6 + carHits * 6),
+      defense: Math.round(50 + (positionScore - 50) * 0.4 - carHits * 5),
+      // Risk = how aggressive: collisions + speed willingness.
+      risk: Math.round(30 + carHits * 12 + wallHits * 6 + topSpeedScore * 0.15),
+      // Comeback only meaningful if we know start vs finish; we don't,
+      // proxy with how much above mid-pack the player ended.
+      comeback: Math.round(40 + (positionScore - 50) * 0.5),
+      pressure: Math.round(50 + (lapScore - 50) * 0.4 + (positionScore - 50) * 0.3),
+      management: Math.round(50 + (cleanScore - 50) * 0.3 + (positionScore - 50) * 0.3),
+    }
+  }
 
   // Helper: position car/camera at start.
   const placeCarAtStart = (): void => {
@@ -329,8 +369,9 @@ function bootstrap(): void {
         .addScaledVector(lat, 4)
         .add(new THREE.Vector3(0, 3.5, 0))
       bundle.camera.lookAt(carP.x, carP.y + 0.6, carP.z)
-      menu.show(async ({ difficulty, inputMode }) => {
+      menu.show(async ({ difficulty, inputMode, commentaryEnabled }) => {
         ctx.difficulty = difficulty
+        world.commentary.setEnabled(commentaryEnabled)
         SFX.uiClick()
         unlockAudio()
         // Boot the engine + BGM rig from inside the click handler so iOS
@@ -678,8 +719,11 @@ function bootstrap(): void {
   })
 
   sm.register(GameState.RESULT, {
-    enter: () => {
+    enter: async () => {
       hud.hide()
+      // Reveal the MBTI-style racer-personality card first, then fall
+      // through to the regular result panel.
+      await personalityCard.show(buildPlayerStats())
       const lap = ctx.raceData.bestLap ?? 0
       const prev = storage.getBestLap()
       // Only count it as a PB if the player actually won the race.
@@ -728,7 +772,12 @@ function bootstrap(): void {
   })
   loop.start()
 
-  void sm.transition(GameState.MENU)
+  // Boot sequence: play the intro video first, then jump into the menu.
+  // If the video fails / is skipped, we still go to the menu.
+  const intro = createIntro('/video/beginning.mp4')
+  void intro.show().then(() => {
+    void sm.transition(GameState.MENU)
+  })
 }
 
 if (document.readyState === 'loading') {
