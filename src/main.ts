@@ -51,6 +51,11 @@ interface World {
   /** Per-opponent: have they already finished the lap? Used so the win check
    *  doesn't fire repeatedly on the same AI after they cross the line. */
   opponentFinished: boolean[]
+  /** Timestamp (performance.now()) at which the last AI crossed the line.
+   *  Used to give the player a grace period to also cross so the FINISH
+   *  cinematic features the player's car, not the AI that just finished.
+   *  0 = AIs are still racing. */
+  allAisFinishedAt: number
   finishedOrder: Array<'player' | number>
 }
 
@@ -118,6 +123,7 @@ function bootstrap(): void {
     opponentCars: null,
     opponentBumpCooldown: [],
     opponentFinished: [],
+    allAisFinishedAt: 0,
     finishedOrder: [],
   }
 
@@ -252,6 +258,7 @@ function bootstrap(): void {
     world.opponents = []
     world.opponentBumpCooldown = []
     world.opponentFinished = []
+    world.allAisFinishedAt = 0
     world.finishedOrder = []
   }
 
@@ -264,6 +271,7 @@ function bootstrap(): void {
     world.opponentCars.update(world.opponents)
     world.opponentBumpCooldown = world.opponents.map(() => 0)
     world.opponentFinished = world.opponents.map(() => false)
+    world.allAisFinishedAt = 0
     world.finishedOrder = []
   }
 
@@ -722,16 +730,29 @@ function bootstrap(): void {
       ctx.raceData.topSpeed = physics.state.topSpeed * 3.6
       updateCamera()
 
-      // Finish: first car (player or AI) to complete one lap ends the race.
+      // Finish trigger:
+      //   - Always wait for the PLAYER to cross the line first so the
+      //     FINISH cinematic features the player's car, not whichever AI
+      //     happened to cross last.
+      //   - Soft fallback: if every AI has finished AND the player is
+      //     still on track, give them an 8 s grace window to also cross.
+      //     After that we force-finish (player = last) so a stuck player
+      //     doesn't softlock the race.
       if (physics.state.lapsCompleted >= 1) {
         ctx.raceData.bestLap = lapMs
         ctx.raceData.finalPosition = rank.position
         void sm.transition(GameState.FINISH)
-      } else if (world.opponentFinished.every((f) => f)) {
-        // All AIs have finished and player is still going — player is last.
-        ctx.raceData.bestLap = lapMs
-        ctx.raceData.finalPosition = world.opponents.length + 1
-        void sm.transition(GameState.FINISH)
+      } else {
+        const allDone = world.opponentFinished.length > 0
+          && world.opponentFinished.every((f) => f)
+        if (allDone && world.allAisFinishedAt === 0) {
+          world.allAisFinishedAt = performance.now()
+        }
+        if (allDone && performance.now() - world.allAisFinishedAt > 8000) {
+          ctx.raceData.bestLap = lapMs
+          ctx.raceData.finalPosition = world.opponents.length + 1
+          void sm.transition(GameState.FINISH)
+        }
       }
     },
   })
@@ -783,7 +804,14 @@ function bootstrap(): void {
       minimap.hide()
       // Reveal the MBTI-style racer-personality card first, then fall
       // through to the regular result panel.
-      await personalityCard.show(buildPlayerStats())
+      await personalityCard.show(buildPlayerStats(), {
+        bestLapMs: ctx.raceData.bestLap ?? 0,
+        topSpeedKmh: ctx.raceData.topSpeed,
+        wallHits: ctx.raceData.crashes,
+        carHits: ctx.raceData.opponentHits,
+        finalPosition: ctx.raceData.finalPosition || (world.opponents.length + 1),
+        fieldSize: world.opponents.length + 1,
+      })
       const lap = ctx.raceData.bestLap ?? 0
       const prev = storage.getBestLap()
       // Only count it as a PB if the player actually won the race.
