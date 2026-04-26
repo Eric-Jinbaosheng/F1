@@ -1,9 +1,17 @@
 /**
- * 14 fixed racer personality archetypes. Each one has a 12-dimension
- * "ideal driving profile" the player gets matched against.
+ * 20 F1TI personality archetypes, mapped from the reference profiles in
+ * `结果文案/*.md` (F1TI 8-dim grading: D1 表达直度 / D2 准备强度 /
+ * D3 抗挫韧性 / D4 社交倾向 / D5 规则态度 / D6 情绪透明度 / D7 进取
+ * 程度 / D8 自主程度) → our game's 12-dim driving-stat profile.
  *
- * Modify a profile here = the matcher immediately re-tunes; nothing else
- * needs to change.
+ * The 8-dim grades are the source of truth; deriveProfile() is the
+ * deterministic adapter that turns personality levels into the driving
+ * stats the matcher already uses. Edit a `dims` cell here and the matcher
+ * re-tunes — no other file needs to change.
+ *
+ * Three archetypes (GASL / MASI / MILK) are special-case in the original
+ * F1TI deck (their 8-dim row is `null`) so they get hand-crafted profiles
+ * rooted in the lore instead of the formula.
  */
 
 export const STAT_KEYS = [
@@ -29,106 +37,270 @@ export interface DriverProfile {
   typeName: string
   matchedDriver: string
   summary: string
+  /** Poster slogan from the F1TI card (海报标语). Optional — used by the
+   *  result UI when present. */
+  tagline?: string
   profile: PlayerStats
 }
 
-export const DRIVER_PROFILES: DriverProfile[] = [
+// ---------------------------------------------------------------------------
+// 8-dim → 12-dim adapter
+// ---------------------------------------------------------------------------
+
+type Lvl = 'L' | 'M' | 'H'
+const lvl = (x: Lvl): number => (x === 'L' ? 0.3 : x === 'M' ? 0.6 : 0.9)
+
+interface F1tiDims {
+  D1: Lvl // 表达直度
+  D2: Lvl // 准备强度
+  D3: Lvl // 抗挫韧性
+  D4: Lvl // 社交倾向
+  D5: Lvl // 规则态度
+  D6: Lvl // 情绪透明度
+  D7: Lvl // 进取程度
+  D8: Lvl // 自主程度
+}
+
+const clamp = (x: number): number => Math.max(25, Math.min(95, Math.round(x)))
+
+function deriveProfile(d: F1tiDims): PlayerStats {
+  const D = (k: keyof F1tiDims): number => lvl(d[k])
+  // Each formula encodes a small piece of game-design intuition:
+  //   pace          ← raw ambition (D7) — wants to push the car
+  //   consistency   ← prep (D2) + composed (low D6) + autonomous (D8)
+  //   clean         ← rule-abiding (D5) + prep (D2), penalised by ambition
+  //   cornering     ← ambition (D7) + prep (D2)
+  //   braking       ← prep (D2) + control over rules (D5) + decisiveness (D7)
+  //   racingLine    ← studied lines (D2) + obeys racecraft (D5)
+  //   attack        ← ambition (D7) + directness (D1) + social engagement (D4)
+  //   defense       ← rules (D5) + autonomy (D8) + resilience (D3)
+  //   risk          ← rule-bender (1-D5) + ambition (D7) + speak-up (D1)
+  //   comeback      ← resilience (D3) + ambition (D7)
+  //   pressure      ← prep (D2) + composed (low D6) + resilience (D3)
+  //   management    ← prep (D2) + autonomy (D8) + rule-discipline (D5)
+  return {
+    pace: clamp(50 + 50 * D('D7')),
+    consistency: clamp(35 + 30 * D('D2') + 25 * (1 - D('D6')) + 10 * D('D8')),
+    clean: clamp(40 + 35 * D('D5') + 15 * D('D2') - 10 * D('D7')),
+    cornering: clamp(50 + 25 * D('D7') + 25 * D('D2')),
+    braking: clamp(50 + 25 * D('D2') + 20 * D('D5') + 10 * D('D7')),
+    racingLine: clamp(45 + 30 * D('D2') + 25 * D('D5')),
+    attack: clamp(30 + 35 * D('D7') + 25 * D('D1') + 15 * D('D4')),
+    defense: clamp(30 + 25 * D('D5') + 25 * D('D8') + 20 * D('D3')),
+    risk: clamp(30 + 35 * (1 - D('D5')) + 25 * D('D7') + 15 * D('D1')),
+    comeback: clamp(30 + 50 * D('D3') + 20 * D('D7')),
+    pressure: clamp(30 + 30 * D('D2') + 25 * (1 - D('D6')) + 25 * D('D3')),
+    management: clamp(35 + 30 * D('D2') + 25 * D('D8') + 15 * D('D5')),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Archetype roster — 8-dim levels copied from `结果文案/*.md`.
+// `dims === null` means the F1TI card itself is special-case (intentional
+// blank row); we hand-craft a profile for those.
+// ---------------------------------------------------------------------------
+
+interface F1tiArchetype {
+  typeCode: string
+  typeName: string
+  matchedDriver: string
+  summary: string
+  tagline: string
+  dims: F1tiDims | null
+  /** Required when dims is null. */
+  customProfile?: PlayerStats
+}
+
+const F1TI_ARCHETYPES: F1tiArchetype[] = [
   {
-    typeCode: 'FAST-BORN',
-    typeName: '天才爆发型',
-    matchedDriver: 'Kimi Antonelli',
-    summary: '你拥有年轻天才式的爆发力,能在高速和压力中迅速建立优势。',
-    profile: { pace: 94, consistency: 82, clean: 76, cornering: 90, braking: 88, racingLine: 82, attack: 80, defense: 68, risk: 72, comeback: 65, pressure: 88, management: 72 },
+    typeCode: 'ALON',
+    typeName: '头哥',
+    matchedDriver: 'Fernando Alonso',
+    summary: '老兵全能模板:经验、抗压、韧性都拉满,新人花十年悟的东西你直觉就能做。',
+    tagline: '44岁,还在呢。',
+    dims: { D1: 'M', D2: 'H', D3: 'H', D4: 'M', D5: 'H', D6: 'M', D7: 'H', D8: 'H' },
   },
   {
-    typeCode: 'CLEAN-CTRL',
-    typeName: '精密控制型',
-    matchedDriver: 'George Russell',
-    summary: '你的驾驶方式冷静、精确、稳定,擅长用低失误率赢下比赛。',
-    profile: { pace: 86, consistency: 92, clean: 90, cornering: 84, braking: 90, racingLine: 92, attack: 60, defense: 75, risk: 30, comeback: 45, pressure: 84, management: 85 },
+    typeCode: 'ANTO',
+    typeName: '小孩',
+    matchedDriver: 'Andrea Kimi Antonelli',
+    summary: '还没学会戴面具的天才新生,直觉先于经验,情绪写在脸上,赢了哭输了也哭。',
+    tagline: '不好意思,我还不能喝香槟。',
+    dims: { D1: 'M', D2: 'L', D3: 'M', D4: 'M', D5: 'M', D6: 'H', D7: 'H', D8: 'L' },
   },
   {
-    typeCode: 'ALL-ROUND',
-    typeName: '全能大师型',
-    matchedDriver: 'Lewis Hamilton',
-    summary: '你的驾驶风格全面成熟,能攻能守,也能在压力下保持竞争力。',
-    profile: { pace: 88, consistency: 86, clean: 85, cornering: 86, braking: 88, racingLine: 85, attack: 82, defense: 82, risk: 55, comeback: 65, pressure: 92, management: 82 },
+    typeCode: 'BOTT',
+    typeName: '工具人',
+    matchedDriver: 'Valtteri Bottas',
+    summary: '完赛工具型副驾:抢戏不行,稳定输出在线,关键时刻让位毫不犹豫。',
+    tagline: 'Valtteri,轮到你了。',
+    dims: { D1: 'M', D2: 'M', D3: 'L', D4: 'M', D5: 'L', D6: 'L', D7: 'L', D8: 'L' },
   },
   {
-    typeCode: 'PURE-PACE',
-    typeName: '单圈天赋型',
-    matchedDriver: 'Charles Leclerc',
-    summary: '你的单圈速度和弯道天赋非常突出,擅长用极限速度打出高光。',
-    profile: { pace: 96, consistency: 76, clean: 72, cornering: 94, braking: 90, racingLine: 84, attack: 72, defense: 58, risk: 70, comeback: 45, pressure: 80, management: 68 },
-  },
-  {
-    typeCode: 'COMEBACK',
-    typeName: '黑马逆袭型',
-    matchedDriver: 'Oliver Bearman',
-    summary: '你不是一开始最耀眼的人,但你擅长在比赛中段和后段不断追回位置。',
-    profile: { pace: 80, consistency: 76, clean: 78, cornering: 78, braking: 80, racingLine: 76, attack: 76, defense: 60, risk: 62, comeback: 88, pressure: 76, management: 70 },
-  },
-  {
-    typeCode: 'OPPORTUNE',
-    typeName: '机会猎手型',
+    typeCode: 'GASL',
+    typeName: '加大师',
     matchedDriver: 'Pierre Gasly',
-    summary: '你擅长观察局势,在混乱中保持冷静,并抓住每一个上升名次的机会。',
-    profile: { pace: 78, consistency: 82, clean: 86, cornering: 80, braking: 82, racingLine: 80, attack: 72, defense: 70, risk: 50, comeback: 72, pressure: 82, management: 80 },
+    summary: '跌到谷底反而盖了座庙,越被低估反弹越狠,后半程是你的舞台。',
+    tagline: '小庙怎么了,我照样成佛。',
+    dims: null,
+    // Comeback specialist; mid-pack on raw stats but elite on resilience.
+    customProfile: {
+      pace: 76, consistency: 78, clean: 78, cornering: 78, braking: 80,
+      racingLine: 78, attack: 72, defense: 72, risk: 60, comeback: 95,
+      pressure: 84, management: 78,
+    },
   },
   {
-    typeCode: 'HARD-ATTACK',
-    typeName: '强攻斗士型',
-    matchedDriver: 'Liam Lawson',
-    summary: '你的比赛风格充满攻击性,喜欢主动出击,用强硬动作打开局面。',
-    profile: { pace: 82, consistency: 70, clean: 62, cornering: 82, braking: 86, racingLine: 70, attack: 92, defense: 74, risk: 82, comeback: 70, pressure: 76, management: 62 },
+    typeCode: 'HMLT',
+    typeName: '老汉',
+    matchedDriver: 'Lewis Hamilton',
+    summary: '七冠王的全能模板,准备 + 抗压 + 经验三栏拉满,任何条件下都跑得动。',
+    tagline: '轮胎没了,但我还在。',
+    dims: { D1: 'M', D2: 'H', D3: 'H', D4: 'L', D5: 'M', D6: 'L', D7: 'H', D8: 'M' },
   },
   {
-    typeCode: 'WILD-ROOKIE',
-    typeName: '激进新星型',
-    matchedDriver: 'Isack Hadjar',
-    summary: '你有明显的速度天赋和弯道攻击性,但你的表现更像一颗正在燃烧的新星。',
-    profile: { pace: 84, consistency: 65, clean: 60, cornering: 90, braking: 84, racingLine: 72, attack: 78, defense: 58, risk: 88, comeback: 62, pressure: 70, management: 58 },
+    typeCode: 'KIMI',
+    typeName: '冰人',
+    matchedDriver: 'Kimi Räikkönen',
+    summary: '极简天赋派:不预热、不解释、不社交,凭原始速度直接交成绩。',
+    tagline: '少管我。',
+    dims: { D1: 'L', D2: 'L', D3: 'L', D4: 'L', D5: 'M', D6: 'L', D7: 'M', D8: 'H' },
   },
   {
-    typeCode: 'STRATEGIST',
-    typeName: '稳健策略型',
-    matchedDriver: 'Carlos Sainz',
-    summary: '你开得聪明、稳健,懂得管理节奏和资源,不靠鲁莽取胜。',
-    profile: { pace: 82, consistency: 90, clean: 90, cornering: 80, braking: 86, racingLine: 88, attack: 68, defense: 76, risk: 35, comeback: 55, pressure: 82, management: 92 },
+    typeCode: 'LNDO',
+    typeName: '急性子',
+    matchedDriver: 'Lando Norris',
+    summary: '直爽 + 情绪外放 + 攻击性十足的新生代,等不及变冷静就要赢。',
+    tagline: '急什么急,我已经是冠军了。',
+    dims: { D1: 'H', D2: 'M', D3: 'H', D4: 'M', D5: 'M', D6: 'H', D7: 'H', D8: 'M' },
   },
   {
-    typeCode: 'WILD-BREAK',
-    typeName: '野性突破型',
-    matchedDriver: 'Yuki Tsunoda',
-    summary: '你的驾驶极具冲击力,敢于冒险,也经常能打出意想不到的突破。',
-    profile: { pace: 82, consistency: 66, clean: 58, cornering: 84, braking: 80, racingLine: 68, attack: 82, defense: 60, risk: 90, comeback: 82, pressure: 66, management: 55 },
+    typeCode: 'LOCK',
+    typeName: '老四',
+    matchedDriver: 'Nico Hülkenberg',
+    summary: '年年有戏年年差一点,跑得动但缺机会,中游战神挠破头不上头部。',
+    tagline: '差一点,永远差那么一点。',
+    dims: { D1: 'M', D2: 'M', D3: 'H', D4: 'M', D5: 'L', D6: 'H', D7: 'H', D8: 'L' },
   },
   {
-    typeCode: 'RELIABLE',
-    typeName: '可靠老将型',
-    matchedDriver: 'Nico Hulkenberg',
-    summary: '你的驾驶不浮夸,但非常可靠,擅长用稳定和低失误完成比赛。',
-    profile: { pace: 74, consistency: 86, clean: 92, cornering: 76, braking: 80, racingLine: 84, attack: 50, defense: 66, risk: 28, comeback: 35, pressure: 78, management: 82 },
+    typeCode: 'MASI',
+    typeName: '马戏',
+    matchedDriver: 'Michael Masi',
+    summary: '薛定谔的判罚:你不知道你犯没犯规,直到他打开那个信封。混乱即风格。',
+    tagline: '这就是赛车。',
+    dims: null,
+    // Off-chart fallback profile — chaotic, unpredictable, no fixed strength.
+    customProfile: {
+      pace: 60, consistency: 35, clean: 30, cornering: 60, braking: 55,
+      racingLine: 50, attack: 50, defense: 55, risk: 80, comeback: 50,
+      pressure: 35, management: 30,
+    },
   },
   {
-    typeCode: 'RAW-TALENT',
-    typeName: '高潜力波动型',
-    matchedDriver: 'Gabriel Bortoleto',
-    summary: '你的驾驶中有明显高光,某些瞬间非常快,但还需要把整场比赛串起来。',
-    profile: { pace: 78, consistency: 62, clean: 62, cornering: 86, braking: 78, racingLine: 70, attack: 74, defense: 52, risk: 78, comeback: 60, pressure: 62, management: 55 },
+    typeCode: 'MILK',
+    typeName: '毒奶',
+    matchedDriver: 'The Cursed Pundit',
+    summary: '看好谁谁翻车的玄学气场,自己稳得不冒险,反而难踩出节奏。',
+    tagline: '我觉得他能赢,完了。',
+    dims: null,
+    // Soft-but-jinxed; everything mediocre, low risk, low pace.
+    customProfile: {
+      pace: 50, consistency: 60, clean: 70, cornering: 55, braking: 60,
+      racingLine: 60, attack: 45, defense: 55, risk: 35, comeback: 40,
+      pressure: 50, management: 60,
+    },
   },
   {
-    typeCode: 'TIME-TRIAL',
-    typeName: '冷静计时型',
-    matchedDriver: 'Alex Albon',
-    summary: '你的驾驶像精准计时赛一样干净稳定,几乎不做多余冒险。',
-    profile: { pace: 80, consistency: 94, clean: 96, cornering: 78, braking: 86, racingLine: 94, attack: 35, defense: 60, risk: 20, comeback: 30, pressure: 76, management: 86 },
+    typeCode: 'PIAS',
+    typeName: '淡人',
+    matchedDriver: 'Oscar Piastri',
+    summary: '冷静自洽,不悲不喜,几圈下来用一致性慢慢咬住对手再一击致命。',
+    tagline: '哦,行。',
+    dims: { D1: 'L', D2: 'M', D3: 'M', D4: 'L', D5: 'M', D6: 'L', D7: 'H', D8: 'H' },
   },
   {
-    typeCode: 'HARD-DEFEND',
-    typeName: '强硬防守型',
-    matchedDriver: 'Esteban Ocon',
-    summary: '你的防守非常强硬,别人想超过你会很困难。',
-    profile: { pace: 78, consistency: 76, clean: 68, cornering: 76, braking: 80, racingLine: 74, attack: 70, defense: 92, risk: 65, comeback: 55, pressure: 80, management: 68 },
+    typeCode: 'RICO',
+    typeName: '大牙',
+    matchedDriver: 'Daniel Ricciardo',
+    summary: '笑着上车的进攻派,刹车点比谁都晚,赢不赢先看气氛。',
+    tagline: '人生苦短,先笑为敬。',
+    dims: { D1: 'H', D2: 'L', D3: 'L', D4: 'H', D5: 'L', D6: 'H', D7: 'L', D8: 'L' },
+  },
+  {
+    typeCode: 'RUSS',
+    typeName: '优等生',
+    matchedDriver: 'George Russell',
+    summary: '所有规则、所有数据、所有 PPT 都背好了,凭准备度压制天赋型。',
+    tagline: '请看PPT第7页。',
+    dims: { D1: 'M', D2: 'H', D3: 'M', D4: 'M', D5: 'L', D6: 'M', D7: 'H', D8: 'M' },
+  },
+  {
+    typeCode: 'STEI',
+    typeName: '教官',
+    matchedDriver: 'Guenther Steiner',
+    summary: '团队大嗓门 + 执行力满格,带着队伍即使撞墙也能撞出节奏。',
+    tagline: '今天的英语课开始了。',
+    dims: { D1: 'H', D2: 'L', D3: 'H', D4: 'H', D5: 'H', D6: 'H', D7: 'M', D8: 'H' },
+  },
+  {
+    typeCode: 'STRL',
+    typeName: '少爷',
+    matchedDriver: 'Lance Stroll',
+    summary: '不需要拼命也能上位,稳到底,不冒险也不出错。',
+    tagline: '我爸说今天会下雨。',
+    dims: { D1: 'L', D2: 'L', D3: 'L', D4: 'M', D5: 'H', D6: 'L', D7: 'L', D8: 'M' },
+  },
+  {
+    typeCode: 'TIFS',
+    typeName: '受苦人',
+    matchedDriver: 'Tifosi',
+    summary: '永远在等"明年",韧性是被现实磨出来的,不靠天赋靠死撑。',
+    tagline: '明年,明年一定行。',
+    dims: { D1: 'M', D2: 'L', D3: 'H', D4: 'H', D5: 'L', D6: 'H', D7: 'M', D8: 'L' },
+  },
+  {
+    typeCode: 'TOTO',
+    typeName: '马桶',
+    matchedDriver: 'Toto Wolff',
+    summary: '准备 + 表达 + 自主三爆,场外指挥的能量比场内车手还高。',
+    tagline: '耳机是消耗品。',
+    dims: { D1: 'H', D2: 'H', D3: 'H', D4: 'M', D5: 'H', D6: 'H', D7: 'H', D8: 'M' },
+  },
+  {
+    typeCode: 'VETL',
+    typeName: '歪头',
+    matchedDriver: 'Sebastian Vettel',
+    summary: '老冠军余韵,稳但不再抢,擅长用经验讲道理给后辈听。',
+    tagline: '转了,但没关系。',
+    dims: { D1: 'M', D2: 'M', D3: 'L', D4: 'M', D5: 'M', D6: 'M', D7: 'L', D8: 'M' },
+  },
+  {
+    typeCode: 'VSTP',
+    typeName: '汽车人',
+    matchedDriver: 'Max Verstappen',
+    summary: '顶级速度 + 顶级执行 + 顶级压制力,把"你太慢了"变成行业标准。',
+    tagline: '你们太慢了。',
+    dims: { D1: 'H', D2: 'M', D3: 'H', D4: 'L', D5: 'H', D6: 'L', D7: 'H', D8: 'H' },
+  },
+  {
+    typeCode: 'ZHOU',
+    typeName: '先行者',
+    matchedDriver: 'Zhou Guanyu',
+    summary: '不一定最快,但每一步都在为后来者趟路,稳中带韧。',
+    tagline: '总要有人先走这一步。',
+    dims: { D1: 'L', D2: 'M', D3: 'M', D4: 'M', D5: 'L', D6: 'M', D7: 'M', D8: 'L' },
   },
 ]
+
+// ---------------------------------------------------------------------------
+// Public roster the matcher consumes.
+// ---------------------------------------------------------------------------
+
+export const DRIVER_PROFILES: DriverProfile[] = F1TI_ARCHETYPES.map((a) => ({
+  typeCode: a.typeCode,
+  typeName: a.typeName,
+  matchedDriver: a.matchedDriver,
+  summary: a.summary,
+  tagline: a.tagline,
+  profile: a.dims ? deriveProfile(a.dims) : (a.customProfile as PlayerStats),
+}))
