@@ -55,7 +55,7 @@ export function createHud(): HudController {
     })()
     modeEl = document.createElement('div')
     modeEl.style.cssText = `
-      position: absolute; left: 24px; top: 24px;
+      position: absolute; left: 24px; top: 160px;
       font-size: 12px; padding: 4px 8px; border-radius: 4px;
       background: rgba(0,0,0,0.5); color: #25f4ee;
       ${isMobile ? 'display: none;' : ''}

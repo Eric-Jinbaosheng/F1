@@ -14,6 +14,7 @@ import { createMenu } from './ui/menu'
 import { createHud } from './ui/hud'
 import { createResult } from './ui/result'
 import { createIntro } from './ui/intro'
+import { createMinimap } from './ui/minimap'
 import { createPersonalityCard } from './ui/personalityCard'
 import type { PlayerStats } from './racerPersonality'
 import { SFX, unlockAudio } from './audio/zzfx'
@@ -195,6 +196,7 @@ function bootstrap(): void {
   hud.update({ speedKmh: 0, lapMs: 0, mode: 'keyboard' })
   const result = createResult()
   const personalityCard = createPersonalityCard()
+  const minimap = createMinimap(track)
 
   /** Heuristic mapper: turn the data we actually collect during a race
    *  into a 12-dimension PlayerStats input the personality matcher
@@ -580,6 +582,7 @@ function bootstrap(): void {
       ctx.raceData.finalPosition = 0
       world.commentary.resetRace()
       world.coach.resetRace()
+      minimap.show()
       world.commentary.unlock() // countdown click already happened
       world.commentary.trigger('race_start', true)
       resetCornerState()
@@ -695,6 +698,16 @@ function bootstrap(): void {
         offTrack: physics.state.crashed,
       })
 
+      // --- Mini-map: 4 dots (player + 3 AI) on a tiny track silhouette.
+      minimap.update({
+        player: { x: physics.state.pos.x, z: physics.state.pos.z },
+        opponents: world.opponents.map((opp) => ({
+          x: opp.pos.x,
+          z: opp.pos.z,
+          color: opp.profile.color,
+        })),
+      })
+
       // HUD
       const lapMs = performance.now() - ctx.raceData.startTime
       const rank = computePosition()
@@ -767,6 +780,7 @@ function bootstrap(): void {
   sm.register(GameState.RESULT, {
     enter: async () => {
       hud.hide()
+      minimap.hide()
       // Reveal the MBTI-style racer-personality card first, then fall
       // through to the regular result panel.
       await personalityCard.show(buildPlayerStats())
