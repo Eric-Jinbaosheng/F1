@@ -19,6 +19,7 @@ import type { PlayerStats } from './racerPersonality'
 import { SFX, unlockAudio } from './audio/zzfx'
 import { createAudioRig, type AudioRig } from './audio/engine'
 import { CommentarySystem } from './audio/commentary'
+import { CoachSystem } from './audio/coach'
 import {
   createOpponents,
   updateOpponent,
@@ -37,6 +38,7 @@ interface World {
   countdown: ReturnType<typeof createCountdown> | null
   audio: AudioRig | null
   commentary: CommentarySystem
+  coach: CoachSystem
   raceStart: number
   shakeT: number
   shakeMag: number
@@ -106,6 +108,7 @@ function bootstrap(): void {
     countdown: null,
     audio: null,
     commentary: new CommentarySystem({ volume: 0.9 }),
+    coach: new CoachSystem(track, { volume: 0.95 }),
     raceStart: 0,
     shakeT: 0,
     shakeMag: 0,
@@ -378,9 +381,13 @@ function bootstrap(): void {
         .addScaledVector(lat, 4)
         .add(new THREE.Vector3(0, 3.5, 0))
       bundle.camera.lookAt(carP.x, carP.y + 0.6, carP.z)
-      menu.show(async ({ difficulty, inputMode, commentaryEnabled }) => {
+      menu.show(async ({ difficulty, inputMode, commentaryMode }) => {
         ctx.difficulty = difficulty
-        world.commentary.setEnabled(commentaryEnabled)
+        // Mutually exclusive: only one voice channel runs at a time so
+        // they don't talk over each other.
+        world.commentary.setEnabled(commentaryMode === 'commentary')
+        world.coach.setEnabled(commentaryMode === 'coach')
+        if (commentaryMode === 'coach') world.coach.unlock()
         SFX.uiClick()
         unlockAudio()
         // Boot the engine + BGM rig from inside the click handler so iOS
@@ -572,6 +579,7 @@ function bootstrap(): void {
       ctx.raceData.opponentHits = 0
       ctx.raceData.finalPosition = 0
       world.commentary.resetRace()
+      world.coach.resetRace()
       world.commentary.unlock() // countdown click already happened
       world.commentary.trigger('race_start', true)
       resetCornerState()
@@ -665,8 +673,9 @@ function bootstrap(): void {
       const _rank = computePosition()
       const _proj = track.projectToTrack(physics.state.pos)
       updateCorner(_proj.t, _proj.offset, physics.state.crashed)
+      const _now = performance.now()
       world.commentary.update({
-        time: performance.now(),
+        time: _now,
         raceState: 'running',
         speed: physics.state.speed,
         steeringAbs: Math.abs(inp.steer),
@@ -677,6 +686,13 @@ function bootstrap(): void {
         lapCount: physics.state.lapsCompleted,
         position: _rank.position,
         fieldSize: _rank.fieldSize,
+      })
+      world.coach.update({
+        time: _now,
+        raceState: 'running',
+        speed: physics.state.speed,
+        lapProgress: physics.state.lapProgress,
+        offTrack: physics.state.crashed,
       })
 
       // HUD

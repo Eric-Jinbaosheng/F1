@@ -3,11 +3,16 @@ import { formatLapTime } from '../utils/math'
 import type { Difficulty } from '../game/opponents'
 import type { InputMode } from '../input'
 
+export type CommentaryMode = 'off' | 'commentary' | 'coach'
+
 export interface MenuStartConfig {
   difficulty: Difficulty
   inputMode: InputMode
-  /** Whether AI race-commentary clips should play during the race. */
-  commentaryEnabled: boolean
+  /** Audio guidance during the race:
+   *   - 'commentary' = pre-recorded race-announcer clips
+   *   - 'coach'      = TTS driving-coach cues (turn / brake / push)
+   *   - 'off'        = silent */
+  commentaryMode: CommentaryMode
 }
 
 export interface MenuController {
@@ -27,10 +32,10 @@ const INPUT_LABELS: Record<InputMode, { label: string; tag: string }> = {
   gyro: { label: '体 感', tag: '倾斜手机' },
 }
 
-type Commentary = 'on' | 'off'
-const COMMENTARY_LABELS: Record<Commentary, { label: string; tag: string }> = {
-  on: { label: '开 启', tag: 'AI 解说员' },
-  off: { label: '关 闭', tag: '安静比赛' },
+const COMMENTARY_LABELS: Record<CommentaryMode, { label: string; tag: string }> = {
+  off:        { label: '关 闭', tag: '安静比赛' },
+  commentary: { label: '解 说', tag: 'AI 解说员' },
+  coach:      { label: '辅 助', tag: '驾驶教练' },
 }
 
 const isCoarsePointer = (): boolean => {
@@ -120,7 +125,7 @@ export function createMenu(): MenuController {
 
     let chosenDiff: Difficulty = 'medium'
     let chosenInput: InputMode = isCoarsePointer() ? 'touch' : 'keyboard'
-    let chosenCommentary: Commentary = 'on'
+    let chosenCommentary: CommentaryMode = 'commentary'
 
     const diffRow = makeRow(
       '难  度',
@@ -139,11 +144,11 @@ export function createMenu(): MenuController {
     )
 
     const commentaryRow = makeRow(
-      '解  说',
-      ['on', 'off'],
+      '语  音',
+      ['off', 'commentary', 'coach'],
       COMMENTARY_LABELS as Record<string, { label: string; tag: string }>,
       chosenCommentary,
-      (k) => { chosenCommentary = k as Commentary },
+      (k) => { chosenCommentary = k as CommentaryMode },
     )
 
     const btn = document.createElement('button')
@@ -185,7 +190,7 @@ export function createMenu(): MenuController {
       onStart({
         difficulty: chosenDiff,
         inputMode: chosenInput,
-        commentaryEnabled: chosenCommentary === 'on',
+        commentaryMode: chosenCommentary,
       })
     }, { once: true })
 
