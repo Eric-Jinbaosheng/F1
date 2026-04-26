@@ -29,6 +29,16 @@ const slugFromDriver = (name: string): string => {
   return parts[parts.length - 1]?.toLowerCase() ?? 'unknown'
 }
 
+/** Manual override per F1TI typeCode for cases where the auto-derived
+ *  slug doesn't match the uploaded asset filename (diacritics, alt
+ *  spellings, anime nicknames, etc.). Add an entry here when shipping a
+ *  new portrait — no other code change needed. */
+const PHOTO_SLUG_BY_TYPECODE: Record<string, string> = {
+  HMLT: 'hamilton',
+  ANTO: 'anto',
+  VSTP: 'verstapan', // matches public/drivers/verstapan.png as uploaded
+}
+
 const PHOTO_EXTS = ['.png', '.jpg', '.jpeg', '.webp']
 
 export function createPersonalityCard(): PersonalityCardController {
@@ -114,7 +124,9 @@ export function createPersonalityCard(): PersonalityCardController {
         display: block;
       `
       // Try each extension in order; if all fail, leave the slot empty.
-      const slug = slugFromDriver(personality['匹配车手'])
+      const typeCode = personality['类型代码'] as string | undefined
+      const slug = (typeCode && PHOTO_SLUG_BY_TYPECODE[typeCode])
+        ?? slugFromDriver(personality['匹配车手'])
       let extIdx = 0
       const tryNextExt = (): void => {
         if (extIdx >= PHOTO_EXTS.length) {

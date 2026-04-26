@@ -294,13 +294,22 @@ const F1TI_ARCHETYPES: F1tiArchetype[] = [
 
 // ---------------------------------------------------------------------------
 // Public roster the matcher consumes.
+//
+// Only archetypes whose typeCode is in `ACTIVE_CODES` are eligible match
+// outcomes. The full F1TI deck stays defined above so we can flip the
+// switch as more anime portraits ship — drop a `public/drivers/<slug>.png`
+// + add a code here, no other change needed.
 // ---------------------------------------------------------------------------
 
-export const DRIVER_PROFILES: DriverProfile[] = F1TI_ARCHETYPES.map((a) => ({
-  typeCode: a.typeCode,
-  typeName: a.typeName,
-  matchedDriver: a.matchedDriver,
-  summary: a.summary,
-  tagline: a.tagline,
-  profile: a.dims ? deriveProfile(a.dims) : (a.customProfile as PlayerStats),
-}))
+const ACTIVE_CODES = new Set(['HMLT', 'ANTO', 'VSTP'])
+
+export const DRIVER_PROFILES: DriverProfile[] = F1TI_ARCHETYPES
+  .filter((a) => ACTIVE_CODES.has(a.typeCode))
+  .map((a) => ({
+    typeCode: a.typeCode,
+    typeName: a.typeName,
+    matchedDriver: a.matchedDriver,
+    summary: a.summary,
+    tagline: a.tagline,
+    profile: a.dims ? deriveProfile(a.dims) : (a.customProfile as PlayerStats),
+  }))
