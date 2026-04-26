@@ -323,6 +323,16 @@ function bootstrap(): void {
       world.opponents.push(stub)
       world.peerToOppIdx.set(peer.clientId, i)
     }
+    // Top up empty grid slots with AI bots so the field is always 4 cars
+    // (player + 3 opponents). AI here is purely local — each client runs
+    // their own bots; we don't sync them between peers (the real
+    // competition is between humans).
+    const TOTAL_OPPONENTS = 3
+    const aiNeeded = Math.max(0, TOTAL_OPPONENTS - peers.length)
+    if (aiNeeded > 0) {
+      const aiOpps = createOpponents(track, ctx.difficulty).slice(0, aiNeeded)
+      world.opponents.push(...aiOpps)
+    }
     world.opponentCars = createOpponentCars(world.opponents)
     bundle.scene.add(world.opponentCars.group)
     world.opponentCars.update(world.opponents)
@@ -723,16 +733,18 @@ function bootstrap(): void {
       const COLLIDE_DIST_SQ = COLLIDE_DIST * COLLIDE_DIST
       const BUMP_COOLDOWN_S = 0.8
       const playerProgress = physics.state.lapsCompleted + physics.state.lapProgress
-      // In LAN mode we do NOT run AI for opponents — peer state has just
-      // been mirrored into world.opponents by syncLanOpponents() above.
-      const isLan = world.room !== null
-      if (isLan) syncLanOpponents()
+      // LAN slots (driven by peer state over the network) and AI slots
+      // (driven by local updateOpponent) coexist in the same array. Build
+      // a Set of LAN-driven indices once per frame so we know which to skip.
+      if (world.room) syncLanOpponents()
+      const lanSlots: Set<number> = world.room
+        ? new Set(world.peerToOppIdx.values())
+        : new Set()
       for (let i = 0; i < world.opponents.length; i++) {
         const opp = world.opponents[i]
-        if (isLan) {
-          // No-op: pos/heading/lap already pulled from network. Just keep
-          // the finish-detection consistent (peer sets opponentFinished
-          // via the finish message handler too).
+        const isLanSlot = lanSlots.has(i)
+        if (isLanSlot) {
+          // No-op: pos/heading/lap already pulled from network this frame.
         } else if (world.opponentFinished[i]) {
           // Stop AIs from running past the line indefinitely so the field
           // settles at the finish — they decelerate after their first lap.

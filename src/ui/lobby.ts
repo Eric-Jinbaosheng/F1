@@ -91,6 +91,15 @@ export function createLobby(): LobbyController {
         border-radius: 8px;
       `
 
+      // Headline summary that drives the "should I start now?" decision.
+      // Updates colour + text whenever the roster / ready states change.
+      const summary = document.createElement('div')
+      summary.style.cssText = `
+        font-size: 13px; letter-spacing: 2px; text-align: center;
+        padding: 6px 14px; border-radius: 6px;
+        min-width: 320px;
+      `
+
       const buttonRow = document.createElement('div')
       buttonRow.style.cssText = 'display: flex; gap: 12px; margin-top: 8px;'
 
@@ -123,13 +132,8 @@ export function createLobby(): LobbyController {
       `
       startBtn.addEventListener('click', () => {
         if (!client) return
-        // Sanity: don't let the host start with only themselves.
-        const peerCount = client.getPeers().filter((p) => p.clientId !== client!.getMyId()).length
-        if (peerCount < 1) {
-          status.textContent = '至少需要一名其他玩家加入才能开始'
-          status.style.color = '#ef476f'
-          return
-        }
+        // Empty slots fill with local AI bots automatically, so it's OK
+        // to start with zero peers (you race vs 3 AI).
         client.startRace()
         // The host's own onStart isn't fired (server doesn't echo back to
         // sender) so trigger locally here too.
@@ -151,13 +155,14 @@ export function createLobby(): LobbyController {
 
       const note = document.createElement('div')
       note.style.cssText = 'font-size: 11px; color: #888; max-width: 380px; text-align: center; line-height: 1.5;'
-      note.textContent = '主机决定何时开始比赛 · 必须在同一局域网 · 仅开发模式可用'
+      note.textContent = '主机随时可点开始 · 建议等所有真人变绿后再上 · 空位由 AI 补足到 4 人场 · 同一 WiFi · 仅开发模式'
 
       host.appendChild(title)
       host.appendChild(status)
       host.appendChild(urlBox)
       host.appendChild(rosterCaption)
       host.appendChild(rosterEl)
+      host.appendChild(summary)
       host.appendChild(buttonRow)
       host.appendChild(note)
       document.body.appendChild(host)
@@ -180,6 +185,45 @@ export function createLobby(): LobbyController {
             isHost: p.clientId === 1, // first connect = host (server convention)
           })
         }
+
+        // --- Summary banner: tells the host whether to keep waiting or
+        // hit start. Three states:
+        //   1. Solo  → "无其他玩家 · 可立即开始"
+        //   2. Some not ready → "X / Y 已准备 · 建议等待"
+        //   3. All ready → "全部已准备 · 现在就上!"
+        const total = display.length
+        const others = display.filter((r) => !r.isMe)
+        const readyOthers = others.filter((r) => r.ready).length
+        const aiSlots = Math.max(0, 3 - others.length)
+        let summaryText: string
+        let summaryFg = '#fff'
+        let summaryBg = 'rgba(255,255,255,0.05)'
+        if (others.length === 0) {
+          summaryText = `当前 1 人 · 空 ${aiSlots} 位由 AI 补足 · 可直接开始`
+          summaryFg = '#ffd166'
+          summaryBg = 'rgba(255,209,102,0.1)'
+        } else if (readyOthers < others.length) {
+          summaryText = `已准备 ${readyOthers} / ${others.length} 真人 · 建议等待全部就绪${aiSlots > 0 ? ` (空 ${aiSlots} 位将用 AI)` : ''}`
+          summaryFg = '#888'
+          summaryBg = 'rgba(255,255,255,0.04)'
+        } else {
+          summaryText = `✓ 全部 ${others.length} 名真人已准备${aiSlots > 0 ? ` · 空 ${aiSlots} 位用 AI` : ''} · 现在就上!`
+          summaryFg = '#06d6a0'
+          summaryBg = 'rgba(6,214,160,0.12)'
+        }
+        summary.textContent = summaryText
+        summary.style.color = summaryFg
+        summary.style.background = summaryBg
+
+        // Boost the start button when conditions are ideal so the host
+        // sees the "go now!" cue without having to count rows manually.
+        const allReady = others.length === 0 || readyOthers === others.length
+        startBtn.textContent = allReady ? '🏁 立 即 开 始' : '开 始 比 赛 (不再等待)'
+        startBtn.style.boxShadow = allReady ? '0 0 18px rgba(255,24,1,0.7)' : 'none'
+        startBtn.style.transform = allReady ? 'scale(1.04)' : 'scale(1.0)'
+        startBtn.style.transition = 'transform 0.2s ease, box-shadow 0.2s ease'
+        void total
+
         for (const row of display) {
           const r = document.createElement('div')
           r.style.cssText = `

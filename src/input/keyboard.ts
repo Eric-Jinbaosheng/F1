@@ -23,8 +23,8 @@ const BOOST_KEYS = new Set(['Shift'])
 //   MAX_STEER < 1  → cap the magnitude so a held key isn't full-lock
 //   RAMP_RATE      → smoothly accelerate the value toward the target
 //                    instead of slamming straight to ±MAX_STEER
-const KB_MAX_STEER = 0.7
-const KB_RAMP_RATE_PER_S = 4.0 // 0 → MAX_STEER takes ~175 ms
+const KB_MAX_STEER = 0.85
+const KB_RAMP_RATE_PER_S = 5.5 // 0 → MAX_STEER takes ~155 ms
 
 export function createKeyboard(target: EventTarget = window): KeyboardController {
   const held = new Set<string>()
