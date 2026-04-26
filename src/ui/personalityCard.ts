@@ -9,6 +9,12 @@
 
 import { generateRacerPersonalityResult } from '../racerPersonality'
 import type { PlayerStats } from '../racerPersonality'
+// Anime portraits inlined as data URLs by Vite (assetsInlineLimit=100MB)
+// so the bundle is fully self-contained — no extra files to ship in the
+// ZIP and no relative path lookups.
+import hamiltonPhoto from '../assets/drivers/hamilton.webp?url'
+import antoPhoto from '../assets/drivers/anto.webp?url'
+import verstapanPhoto from '../assets/drivers/verstapan.webp?url'
 
 export interface PersonalityCardController {
   /** Render the card. Resolves once the user dismisses it. */
@@ -21,25 +27,14 @@ const CARD_RED_SOFT = 'rgba(183,28,28,0.18)'
 const CARD_INK = '#3a1a1a'
 const CARD_INK_SOFT = '#7a4040'
 
-/** Slug used to look up the driver photo, e.g. "Charles Leclerc" →
- *  "leclerc". Drop a file at public/drivers/<slug>.png|jpg|jpeg|webp
- *  for it to appear in the card's top area. */
-const slugFromDriver = (name: string): string => {
-  const parts = name.split(/\s+/).filter(Boolean)
-  return parts[parts.length - 1]?.toLowerCase() ?? 'unknown'
+/** Anime portrait per F1TI typeCode. Add an entry here when a new
+ *  portrait ships — no other code change needed. Values are data: URLs
+ *  produced by Vite's `?url` import (see top of file). */
+const PHOTO_BY_TYPECODE: Record<string, string> = {
+  HMLT: hamiltonPhoto,
+  ANTO: antoPhoto,
+  VSTP: verstapanPhoto,
 }
-
-/** Manual override per F1TI typeCode for cases where the auto-derived
- *  slug doesn't match the uploaded asset filename (diacritics, alt
- *  spellings, anime nicknames, etc.). Add an entry here when shipping a
- *  new portrait — no other code change needed. */
-const PHOTO_SLUG_BY_TYPECODE: Record<string, string> = {
-  HMLT: 'hamilton',
-  ANTO: 'anto',
-  VSTP: 'verstapan', // matches public/drivers/verstapan.png as uploaded
-}
-
-const PHOTO_EXTS = ['.png', '.jpg', '.jpeg', '.webp']
 
 export function createPersonalityCard(): PersonalityCardController {
   let host: HTMLDivElement | null = null
@@ -123,20 +118,17 @@ export function createPersonalityCard(): PersonalityCardController {
         object-fit: contain;
         display: block;
       `
-      // Try each extension in order; if all fail, leave the slot empty.
+      // Look up the inlined portrait. Missing → hide the slot.
       const typeCode = personality['类型代码'] as string | undefined
-      const slug = (typeCode && PHOTO_SLUG_BY_TYPECODE[typeCode])
-        ?? slugFromDriver(personality['匹配车手'])
-      let extIdx = 0
-      const tryNextExt = (): void => {
-        if (extIdx >= PHOTO_EXTS.length) {
-          photo.style.display = 'none'
-          return
-        }
-        photo.src = `drivers/${slug}${PHOTO_EXTS[extIdx++]}`
+      const photoUrl = typeCode ? PHOTO_BY_TYPECODE[typeCode] : null
+      if (photoUrl) {
+        photo.src = photoUrl
+      } else {
+        photo.style.display = 'none'
       }
-      photo.addEventListener('error', tryNextExt)
-      tryNextExt()
+      photo.addEventListener('error', () => {
+        photo.style.display = 'none'
+      })
       photoBox.appendChild(photo)
 
       // --- "你的赛车人格" header (with red wave dividers on either side).

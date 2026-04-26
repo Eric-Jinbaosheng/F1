@@ -46,12 +46,44 @@ const DRIVER_FLAVOR: Record<string, string> = {
   ZHOU: '你不一定第一,但你给后面来的人留好了车道。',
 }
 
+/** Per-archetype rich F1TI-flavoured reason cards (4 lines each), drawn
+ *  directly from the lore in `结果文案/<code>-*.md`. When an archetype has
+ *  an entry here, we skip the generic stat-based bullet generator and use
+ *  this exclusively — the card reads as character analysis, not a stat
+ *  dump. Add a new code here when its portrait + lore are ready. */
+const F1TI_REASONS: Record<string, string[]> = {
+  HMLT: [
+    '所有人劝你坐下歇歇,你说"我再推一圈",然后又推了一圈,比年轻人还快。',
+    '比赛说到极限,你换个姿势继续推。下一圈永远是你最快的那一圈。',
+    '你的核心驱动力是三个字 —— "还没完",温和拒绝任何"应该到此为止"的判断。',
+    '老汉推车,推到终点。轮胎永远"已经没了",但车永远在前进。',
+  ],
+  ANTO: [
+    '所有人都在说"这件事很难"的时候,你脸上写的是困惑 —— 你真没听懂"难"是什么意思。',
+    '前辈花十五年悟到的东西,你第一天用野路子就做到了,完事发现奖杯上的香槟自己还不够年龄喝。',
+    '你赢了当场哭,输了也当场哭,被夸两句脸就红 —— 不是假谦虚,是真红。',
+    '在一个全员戴面具的世界里,你是最后一个还没学会假装的人。',
+  ],
+  VSTP: [
+    '你只认一个道理:快就是对的,慢就是错的,废话比慢还错。',
+    '别人搞人际关系的时候你在精进业务,别人下班的时候你换台设备继续精进业务。',
+    '通讯录短得像俳句,衣柜里永远同款同色,但论干活,在场所有人加一起是你的背景板。',
+    '你不藏想法 —— 说完顺手把活干了,然后消失。',
+  ],
+}
+
 /**
- * Build 3–4 Chinese reason bullets:
- *   - up to 3 lines from the player's top stats (must clear THRESHOLD)
- *   - 1 archetype flavour line, always last so the card feels personal
+ * Build the 3–4 reason bullets for the result card.
+ *
+ * If the matched archetype has F1TI lore-based reasons, we use those
+ * verbatim — the card then reads as character analysis instead of stat
+ * commentary. Otherwise we fall back to the older generic pipeline:
+ * top player stats + one archetype flavour line.
  */
 export function generateReasons(player: PlayerStats, profile: DriverProfile): string[] {
+  const lore = F1TI_REASONS[profile.typeCode]
+  if (lore && lore.length > 0) return lore.slice(0, 4)
+
   const THRESHOLD = 60 // a stat must clear this to be "your strength"
   const top = topStats(player, 4).filter((k) => player[k] >= THRESHOLD)
 
