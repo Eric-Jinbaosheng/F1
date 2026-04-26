@@ -156,6 +156,32 @@ export function createMenu(): MenuController {
       cursor: pointer;
     `
     btn.addEventListener('click', () => {
+      // CRITICAL for iOS: DeviceOrientationEvent.requestPermission() MUST
+      // be invoked synchronously inside the user-gesture click handler.
+      // Any `await` before the call moves us out of the gesture frame and
+      // iOS silently no-ops the prompt. We always ask (regardless of which
+      // input mode the user picked) so the prompt is out of the way; if
+      // they later switch to gyro mid-game, no extra prompt is needed.
+      try {
+        const D = (window as unknown as {
+          DeviceOrientationEvent?: { requestPermission?: () => Promise<'granted' | 'denied'> }
+        }).DeviceOrientationEvent
+        if (D && typeof D.requestPermission === 'function') {
+          void D.requestPermission().catch((e) => {
+            console.warn('[F1S][menu] iOS gyro permission ask failed:', e)
+          })
+        }
+        const M = (window as unknown as {
+          DeviceMotionEvent?: { requestPermission?: () => Promise<'granted' | 'denied'> }
+        }).DeviceMotionEvent
+        if (M && typeof M.requestPermission === 'function') {
+          void M.requestPermission().catch((e) => {
+            console.warn('[F1S][menu] iOS motion permission ask failed:', e)
+          })
+        }
+      } catch (e) {
+        console.warn('[F1S][menu] iOS permission setup failed:', e)
+      }
       onStart({
         difficulty: chosenDiff,
         inputMode: chosenInput,

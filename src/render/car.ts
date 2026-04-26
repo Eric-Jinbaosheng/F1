@@ -111,10 +111,12 @@ function fitGltfToTrack(model: THREE.Object3D): void {
   let bbox = new THREE.Box3().setFromObject(model)
   let size = bbox.getSize(new THREE.Vector3())
 
-  // Scale longest dimension to 5 m.
-  const longest = Math.max(size.x, size.y, size.z)
-  if (longest > 0) {
-    const s = TARGET_LENGTH_M / longest
+  // Scale by planar (x,z) length to 5 m. Using max(x,y,z) lets a tall rear
+  // wing inflate the bbox and shrink the actual on-track footprint, which
+  // makes some packs (e.g. McLaren MCL35M) visibly smaller than others.
+  const planarLongest = Math.max(size.x, size.z)
+  if (planarLongest > 0) {
+    const s = TARGET_LENGTH_M / planarLongest
     model.scale.setScalar(s)
   }
 

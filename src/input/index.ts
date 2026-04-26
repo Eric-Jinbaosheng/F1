@@ -1,4 +1,9 @@
-import { createGyro, tryRequestGyroPermission, type GyroController } from './gyro'
+import {
+  createGyro,
+  tryRequestGyroPermission,
+  type GyroController,
+  type GyroDebugSnapshot,
+} from './gyro'
 import { createMouseJoystick, type MouseJoystickController } from './mouseJoystick'
 import { createTouch, type TouchController } from './touch'
 import { createKeyboard, type KeyboardController } from './keyboard'
@@ -15,18 +20,34 @@ export type InputMode = 'gyro' | 'touch' | 'keyboard'
 
 export type GyroSource = 'sensor' | 'mouse'
 
+export interface InputInitTrace {
+  preferred: InputMode | undefined
+  wantGyro: boolean
+  granted: boolean
+  isCoarse: boolean
+  gyroCreated: boolean
+  finalMode: InputMode
+}
+
 export interface InputController {
   mode: InputMode
   /** When `mode === 'gyro'`, identifies which provider supplied the data. */
   gyroSource: GyroSource | null
   getInput: () => GameInput
+  /** Live diagnostic snapshot of the gyro pipeline (or null if no gyro). */
+  gyroDebug: () => GyroDebugSnapshot | null
+  /** Static trace of the init decisions — for diagnostic overlay. */
+  initTrace: () => InputInitTrace
   recenter: () => void
   destroy: () => void
 }
 
 const DEFAULT_THROTTLE = 0.6
 const DRS_BOOST = 0.4 // raises throttle from 0.6 to 1.0
-const FALLBACK_MS = 600
+// Some webviews (Douyin sandbox, in-app browsers) take >1 s before the
+// first DeviceOrientationEvent fires; bump the wait so we don't tear the
+// listener down before the host has had a chance to deliver one.
+const FALLBACK_MS = 1500
 
 const isCoarsePointer = (): boolean => {
   try {
@@ -60,28 +81,55 @@ export async function initInput(preferred?: InputMode): Promise<InputController>
   // Default mode: keyboard on desktop (fine pointer), touch on mobile.
   let mode: InputMode = isCoarsePointer() ? 'touch' : 'keyboard'
 
+  const coarse = isCoarsePointer()
   // Try gyro if explicitly requested OR (no preference + touch device).
-  const wantGyro = preferred === 'gyro' || (!preferred && isCoarsePointer())
+  const wantGyro = preferred === 'gyro' || (!preferred && coarse)
+  let grantedTrace = false
+  let gyroCreated = false
   if (wantGyro) {
+    let granted = false
     try {
-      const granted = await tryRequestGyroPermission()
-      if (granted) {
-        gyro = createGyro()
-        await new Promise<void>((res) => setTimeout(res, FALLBACK_MS))
-        if (gyro.isAvailable()) {
-          stick = gyro
-          gyroSource = 'sensor'
-          mode = 'gyro'
-        } else {
-          gyro.destroy()
-          gyro = null
-        }
-      }
+      granted = await tryRequestGyroPermission()
+      console.log('[F1S][input] gyro permission granted:', granted)
     } catch (e) {
-      console.warn('[F1S] gyro init failed, will try fallback:', e)
+      console.warn('[F1S] gyro permission ask threw, treating as denied:', e)
     }
-    // No real sensor — desktop fallback: mouse-as-joystick.
-    if (!gyro && !isCoarsePointer()) {
+    grantedTrace = granted
+    // ALWAYS spin up the gyro listener if user explicitly asked for gyro
+    // mode — never silently fall back to touch. The event listeners are
+    // no-ops while permission is denied but start delivering data the
+    // moment the user re-authorises (Settings → Privacy → Motion). This
+    // also dodges a class of subtle bugs where matchMedia('(pointer:
+    // coarse)') misbehaves in some webviews and would otherwise cause us
+    // to skip gyro creation on iPhone.
+    if (preferred === 'gyro' || granted) {
+      try {
+        gyro = createGyro()
+        gyroCreated = true
+      } catch (e) {
+        console.warn('[F1S] createGyro threw:', e)
+      }
+      if (gyro) {
+        await new Promise<void>((res) => setTimeout(res, FALLBACK_MS))
+        const available = gyro.isAvailable()
+        console.log(
+          '[F1S][input] gyro available after wait:',
+          available,
+          'source:',
+          gyro.source(),
+          'granted:',
+          granted,
+        )
+        stick = gyro
+        gyroSource = 'sensor'
+        mode = 'gyro'
+        // (Permission-denied toast intentionally omitted — the always-on
+        // listener picks up data the moment the user re-grants in iOS
+        // settings, so the popup adds noise without functional value.)
+      }
+    }
+    // Desktop fallback: mouse-as-joystick when no real sensor.
+    if (!gyro && !coarse) {
       mouseJoy = createMouseJoystick()
       stick = mouseJoy
       gyroSource = 'mouse'
@@ -95,11 +143,15 @@ export async function initInput(preferred?: InputMode): Promise<InputController>
 
   const getInput = (): GameInput => {
     // Steer: priority is virtual stick > active keyboard > touch.
+    // In gyro mode, if the sensor isn't delivering yet (permission denied
+    // on iOS, host hasn't woken up the gyro hardware, etc.), fall through
+    // to touch so the player isn't stuck with a non-responsive game.
     let steer = 0
     const kbSteer = keyboard.getSteer()
     if (stick && mode === 'gyro') {
       steer = stick.getSteer()
       if (steer === 0 && kbSteer !== 0) steer = kbSteer
+      if (steer === 0) steer = touch.getSteer()
     } else if (kbSteer !== 0) {
       steer = kbSteer
     } else {
@@ -146,6 +198,15 @@ export async function initInput(preferred?: InputMode): Promise<InputController>
     mode,
     gyroSource,
     getInput,
+    gyroDebug: () => gyro?.debug() ?? null,
+    initTrace: () => ({
+      preferred,
+      wantGyro,
+      granted: grantedTrace,
+      isCoarse: coarse,
+      gyroCreated,
+      finalMode: mode,
+    }),
     recenter: () => stick?.recenter(),
     destroy: () => {
       gyro?.destroy()

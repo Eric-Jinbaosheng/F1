@@ -24,13 +24,13 @@ export default defineConfig({
       ecma: 2020,
       compress: {
         passes: 3,
-        unsafe: true,
-        unsafe_arrows: true,
-        unsafe_math: true,
         drop_console: false,
-        pure_getters: true,
       },
-      mangle: { properties: { regex: /^_/ } },
+      // No `unsafe_arrows` / `unsafe` — they convert constructor functions
+      // into arrow functions, which then fail when `new`-ed and surface as
+      // "TypeError: ... is not a constructor" at runtime in stricter
+      // sandboxes (e.g. Douyin virtual creator). No `mangle.properties` —
+      // that renames Three.js internal `_*` fields and breaks rendering.
       format: { comments: false },
     },
   },

@@ -22,7 +22,7 @@ const CARD_INK = '#3a1a1a'
 const CARD_INK_SOFT = '#7a4040'
 
 /** Slug used to look up the driver photo, e.g. "Charles Leclerc" →
- *  "leclerc". Drop a file at /public/drivers/<slug>.png|jpg|jpeg|webp
+ *  "leclerc". Drop a file at public/drivers/<slug>.png|jpg|jpeg|webp
  *  for it to appear in the card's top area. */
 const slugFromDriver = (name: string): string => {
   const parts = name.split(/\s+/).filter(Boolean)
@@ -98,7 +98,7 @@ export function createPersonalityCard(): PersonalityCardController {
       `
 
       // --- Driver photo slot (top half of the card). Empty by default;
-      // drop a matching file at /drivers/<slug>.<ext> and it appears here.
+      // drop a matching file at drivers/<slug>.<ext> and it appears here.
       const photoBox = document.createElement('div')
       photoBox.style.cssText = `
         flex: 1 1 0; min-height: 0;
@@ -121,7 +121,7 @@ export function createPersonalityCard(): PersonalityCardController {
           photo.style.display = 'none'
           return
         }
-        photo.src = `/drivers/${slug}${PHOTO_EXTS[extIdx++]}`
+        photo.src = `drivers/${slug}${PHOTO_EXTS[extIdx++]}`
       }
       photo.addEventListener('error', tryNextExt)
       tryNextExt()

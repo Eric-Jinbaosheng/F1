@@ -1,7 +1,9 @@
 import * as THREE from 'three'
 // Inlined as a base64 data URL by Vite (assetsInlineLimit = 100 MB) so the
-// final bundle is fully offline — no fetch / XHR at runtime.
-import shanghaiEnvUrl from '../assets/textures/shanghai_environment.png?url'
+// final bundle is fully offline — no fetch / XHR at runtime. WebP at 1024×
+// halves the size vs the original 1600×1000 PNG with no perceivable
+// difference at game camera ranges.
+import shanghaiEnvUrl from '../assets/textures/shanghai_environment.webp?url'
 import type { WeatherPreset } from './weather'
 
 const ROAD_HALF_WIDTH = 7 // 14 m total = SIC spec
@@ -1380,7 +1382,6 @@ export function createTrack(): TrackBundle {
   const asphaltCol = new THREE.Color('#5a5a60')
   const kerbRed = new THREE.Color('#d11')
   const kerbWhite = new THREE.Color('#f5f5f5')
-  const startCol = new THREE.Color('#ffffff')
 
   const lateralAt = (t: number, out: THREE.Vector3): THREE.Vector3 =>
     lateralAtForCurve(curve, t, out)
@@ -1405,15 +1406,15 @@ export function createTrack(): TrackBundle {
     positions.push(right.x, yBias, right.z)
     positions.push(rightKerb.x, yBias, rightKerb.z)
 
-    // Kerb red/white alternating every ~4 segments; start line first segment white.
-    const isStart = i < 3
+    // Kerb red/white alternating every ~4 segments. The thin painted
+    // start/finish line is drawn separately as its own mesh (see below)
+    // so it doesn't bleed across multiple road segments and cover the
+    // grid-box outlines.
     const stripe = Math.floor(i / 4) % 2 === 0 ? kerbRed : kerbWhite
-    const cKerb = isStart ? startCol : stripe
-    const cRoad = isStart ? startCol : asphaltCol
-    colors.push(cKerb.r, cKerb.g, cKerb.b)
-    colors.push(cRoad.r, cRoad.g, cRoad.b)
-    colors.push(cRoad.r, cRoad.g, cRoad.b)
-    colors.push(cKerb.r, cKerb.g, cKerb.b)
+    colors.push(stripe.r, stripe.g, stripe.b)
+    colors.push(asphaltCol.r, asphaltCol.g, asphaltCol.b)
+    colors.push(asphaltCol.r, asphaltCol.g, asphaltCol.b)
+    colors.push(stripe.r, stripe.g, stripe.b)
 
     const v = t * 80
     uvs.push(0, v, 0.1, v, 0.9, v, 1, v)
@@ -1483,6 +1484,72 @@ export function createTrack(): TrackBundle {
   const startT = curve.getTangentAt(0)
   const lat = new THREE.Vector3(-startT.z, 0, startT.x).normalize()
   const yaw = Math.atan2(startT.x, startT.z)
+
+  // --- F1 starting-grid boxes painted on the asphalt.
+  // No separate start/finish line — the gantry above already marks t=0
+  // and a painted strip at the same elevation as the grid-box outlines
+  // would visually merge with them.
+  // Layout matches src/game/opponents.ts: 4 slots, 8 m staggered, ±3 m lat,
+  // odd slots on pole side, even slots on off side. Box size is sized to a
+  // real F1 grid box (≈3 m wide × 6 m long with a thin white outline). The
+  // boxes sit a hair above road y to avoid z-fighting with the asphalt.
+  {
+    const GRID_SLOT_M = 8
+    const POLE_LAT_M = 3
+    const PLAYER_SLOT = 4
+    const TOTAL_SLOTS = 4
+    const BOX_W = 3.0
+    const BOX_L = 6.0
+    const BOX_THICK = 0.18
+    const BOX_Y = 0.04
+
+    const gridMat = new THREE.MeshStandardMaterial({
+      color: '#ffffff',
+      emissive: '#ffffff',
+      emissiveIntensity: 0.18,
+      roughness: 1.0,
+      metalness: 0,
+    })
+    disposables.materials.push(gridMat)
+    // Two shared geometries: cross-track edge (front/back) and along-track
+    // edge (left/right). 4 instances per slot × 4 slots = 16 cheap meshes.
+    const edgeCross = new THREE.BoxGeometry(BOX_W, 0.04, BOX_THICK)
+    const edgeAlong = new THREE.BoxGeometry(BOX_THICK, 0.04, BOX_L)
+    disposables.geometries.push(edgeCross, edgeAlong)
+
+    for (let slot = 1; slot <= TOTAL_SLOTS; slot++) {
+      const metresAhead = (PLAYER_SLOT - slot) * GRID_SLOT_M
+      const sideSign = slot % 2 === 1 ? 1 : -1
+      const center = startP
+        .clone()
+        .addScaledVector(startT, metresAhead)
+        .addScaledVector(lat, sideSign * POLE_LAT_M)
+
+      const placeEdge = (
+        geo: THREE.BoxGeometry,
+        forwardOffset: number,
+        lateralOffset: number,
+      ): void => {
+        const m = new THREE.Mesh(geo, gridMat)
+        m.position
+          .copy(center)
+          .addScaledVector(startT, forwardOffset)
+          .addScaledVector(lat, lateralOffset)
+        m.position.y = BOX_Y
+        m.rotation.y = yaw
+        m.receiveShadow = true
+        group.add(m)
+      }
+      // Real F1 grid markings: a U-shape opening BACKWARDS — front line
+      // + two side lines, no rear line. Driver enters the slot from behind
+      // and lines the front wing up against the cross stripe. The lateral
+      // stripes guide the driver to keep the car straight inside the box.
+      placeEdge(edgeCross, BOX_L / 2, 0) // front cross stripe
+      placeEdge(edgeAlong, 0, BOX_W / 2) // pole-side stripe
+      placeEdge(edgeAlong, 0, -BOX_W / 2) // off-side stripe
+    }
+  }
+
   const left = new THREE.Mesh(post, gantryMat)
   left.position.copy(startP).addScaledVector(lat, -(ROAD_HALF_WIDTH + 1))
   left.position.y = 3

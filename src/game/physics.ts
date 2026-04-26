@@ -34,9 +34,25 @@ export interface PhysicsBundle {
   triggerCrash: () => void
 }
 
+/** Place the player on their F1 grid slot (rear-most, off-side column).
+ *  Mirrors src/game/opponents.ts gridLatForSlot(PLAYER_GRID_SLOT=4) so the
+ *  diagonal F1-style grid stays consistent across the field. */
+function gridStartPos(tr: TrackBundle, out: THREE.Vector3): void {
+  out.copy(tr.getPositionAt(0))
+  const tg = tr.getTangentAt(0)
+  // Lateral basis (perpendicular to tangent, planar).
+  const lx = -tg.z
+  const lz = tg.x
+  const len = Math.hypot(lx, lz) || 1
+  // Even slot → off side → -POLE_LAT_M (= -3). Player is slot 4.
+  const PLAYER_LAT = -3
+  out.x += (lx / len) * PLAYER_LAT
+  out.z += (lz / len) * PLAYER_LAT
+}
+
 export function createPhysics(track: TrackBundle): PhysicsBundle {
   const state: PhysicsState = {
-    pos: track.getPositionAt(0).clone(),
+    pos: new THREE.Vector3(),
     heading: Math.atan2(track.getTangentAt(0).x, track.getTangentAt(0).z),
     speed: 0,
     topSpeed: 0,
@@ -46,11 +62,12 @@ export function createPhysics(track: TrackBundle): PhysicsBundle {
     crashCooldown: 0,
     totalCrashes: 0,
   }
+  gridStartPos(track, state.pos)
 
   let lastT = 0
 
   const reset = (tr: TrackBundle): void => {
-    state.pos.copy(tr.getPositionAt(0))
+    gridStartPos(tr, state.pos)
     const tg = tr.getTangentAt(0)
     state.heading = Math.atan2(tg.x, tg.z)
     state.speed = 0

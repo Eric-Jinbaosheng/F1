@@ -229,6 +229,7 @@ function bootstrap(): void {
     }
   }
 
+
   // Helper: position car/camera at start.
   const placeCarAtStart = (): void => {
     physics.reset(track)
@@ -357,6 +358,14 @@ function bootstrap(): void {
   // ---------------- States ----------------
   sm.register(GameState.MENU, {
     enter: () => {
+      // Tear down lights gantry from any previous race (built in COUNTDOWN
+      // enter). Without this, repeated MENU↔RACE cycles stack copies in the
+      // scene graph.
+      if (world.lightsRig) {
+        bundle.scene.remove(world.lightsRig.group)
+        world.lightsRig.dispose()
+        world.lightsRig = null
+      }
       placeCarAtStart()
       // Showcase camera: orbit-style 3/4 view of the car at the start grid.
       const carP = car.group.position
@@ -440,6 +449,11 @@ function bootstrap(): void {
       // Commentator kicks off the build-up.
       world.commentary.unlock()
       world.commentary.trigger('countdown', true)
+      // First gyro recentre — captures the pose the player has settled into
+      // as soon as the grid view is ready, BEFORE the lights start (so the
+      // jump-start detector during lights doesn't trip on a stale baseline
+      // from menu time).
+      world.input?.recenter()
       // Snap camera to chase position (4 m back, 2.2 m up) so the
       // countdown view doesn't lerp in from the MENU 3/4 orbit shot.
       accelLerp = 0
@@ -460,12 +474,19 @@ function bootstrap(): void {
         lapMs: 0,
         mode: ctx.inputMode,
       })
-      // Build lights rig at start gantry
+      // Build lights gantry. Pole position (P1, Veteran) sits 24 m ahead
+      // of t=0 — the lights stand a few metres further down so the pole
+      // sitter looks UP at them, matching real F1 starting-lights
+      // placement (≈10 m past the front-row grid box).
       const startPos = track.getPositionAt(0).clone()
       const tg = track.getTangentAt(0)
       const yaw = Math.atan2(tg.x, tg.z)
-      // Place lights slightly ahead of start so player sees them
-      startPos.addScaledVector(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), 12)
+      const POLE_M = 24 // matches PLAYER_GRID_SLOT * GRID_SLOT_M (4-1)*8
+      const LIGHTS_AHEAD_OF_POLE_M = 10
+      startPos.addScaledVector(
+        new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
+        POLE_M + LIGHTS_AHEAD_OF_POLE_M,
+      )
       world.lightsRig = createLightsRig(startPos, yaw)
       bundle.scene.add(world.lightsRig.group)
 
@@ -474,7 +495,9 @@ function bootstrap(): void {
         (n) => {
           SFX.countdownBeep()
           if (navigator.vibrate) navigator.vibrate(60 + n * 20)
-          hud.flash(`${n}`, '#ff3b30', 400)
+          // n is the LAMP count going UP (1→5). Display as a real countdown
+          // (5→1) so the player sees a traditional pre-race countdown.
+          hud.flash(`${6 - n}`, '#ff3b30', 400)
         },
         () => {
           SFX.lightsOut()
@@ -483,6 +506,12 @@ function bootstrap(): void {
           triggerShake(0.4, 0.4)
           hud.flash('GO!', '#00d2be', 800)
           world.raceStart = performance.now() + world.jumpStartPenaltyMs
+          // Re-zero gyro at the lights-out moment: by now the player is
+          // gripping the phone in their race posture (the auto-calibration
+          // 1 s after createGyro() may have caught the menu pose, e.g.
+          // phone tilted while reading the screen / tapping permission).
+          // Recentring here gives a clean baseline for the actual race.
+          world.input?.recenter()
           void sm.transition(GameState.RACE)
         },
         () => {
@@ -500,12 +529,13 @@ function bootstrap(): void {
             if (!world.lightsRig) return
             world.countdown = createCountdown(
               world.lightsRig,
-              (n) => SFX.countdownBeep() ?? hud.flash(`${n}`, '#ff3b30', 400),
+              (n) => SFX.countdownBeep() ?? hud.flash(`${6 - n}`, '#ff3b30', 400),
               () => {
                 SFX.lightsOut()
                 triggerShake(0.4, 0.4)
                 hud.flash('GO!', '#00d2be', 800)
                 world.raceStart = performance.now() + world.jumpStartPenaltyMs
+                world.input?.recenter()
                 void sm.transition(GameState.RACE)
               },
               () => {
@@ -531,11 +561,11 @@ function bootstrap(): void {
 
   sm.register(GameState.RACE, {
     enter: () => {
-      if (world.lightsRig) {
-        bundle.scene.remove(world.lightsRig.group)
-        world.lightsRig.dispose()
-        world.lightsRig = null
-      }
+      // Lights gantry stays in the world after lights-out — real F1 leaves
+      // the structure standing for the whole race. Only ensure the lamps
+      // are off (countdown's done-phase already calls setAllOff, but be
+      // defensive in case of a state-machine restart).
+      world.lightsRig?.setAllOff()
       ctx.raceData.startTime = world.raceStart
       ctx.raceData.crashes = 0
       ctx.raceData.topSpeed = 0
@@ -774,7 +804,7 @@ function bootstrap(): void {
 
   // Boot sequence: play the intro video first, then jump into the menu.
   // If the video fails / is skipped, we still go to the menu.
-  const intro = createIntro('/video/beginning.mp4')
+  const intro = createIntro('video/beginning.mp4')
   void intro.show().then(() => {
     void sm.transition(GameState.MENU)
   })

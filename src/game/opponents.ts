@@ -45,13 +45,42 @@ const DIFFICULTY_SCALE: Record<Difficulty, number> = {
  *  so AIs can never run away from the player on a flat-out straight. */
 const BASE_SPEED_CAP = 84
 
-const PROFILES: Array<Omit<OpponentProfile, 'baseSpeed' | 'latGripG'>> = [
+/**
+ * Real-F1 starting grid layout (FIA Sporting Regs ≈ 8 m longitudinal,
+ * staggered left/right). For an N-car grid:
+ *   slot 1 (pole) — pole side, 0 m back
+ *   slot 2        — off side,  GRID_SLOT_M back
+ *   slot 3        — pole side, 2·GRID_SLOT_M back
+ *   slot 4        — off side,  3·GRID_SLOT_M back  (← player sits here)
+ *   ...
+ * Pole-side / off-side defined by sign of POLE_LAT_M.
+ */
+export const GRID_SLOT_M = 8
+export const POLE_LAT_M = 3
+/** Player occupies the rear-most grid slot (4-car field → P4). */
+export const PLAYER_GRID_SLOT = 4
+
+/** Lateral offset (signed metres) for the given 1-based grid slot. */
+export function gridLatForSlot(slot: number): number {
+  // Odd slots = pole side, even slots = off side.
+  return slot % 2 === 1 ? POLE_LAT_M : -POLE_LAT_M
+}
+
+/** Each AI's grid slot. Higher tier (Veteran) gets the better starting
+ *  position — same as a real qualifying-driven grid. */
+const AI_GRID_SLOTS: Record<string, number> = {
+  Veteran: 1,   // pole
+  Aggressor: 2, // P2
+  Rookie: 3,    // P3
+}
+
+const PROFILES: Array<Omit<OpponentProfile, 'baseSpeed' | 'latGripG' | 'startStagger' | 'startLat'>> = [
   // Veteran: balanced, mistakes rarely.
-  { name: 'Veteran',   color: '#ffd166', driftAmplitude: 1.2, driftFreq: 9,  startStagger: 0.0030, startLat:  3, mistakeRate: 0.006, mistakeMinS: 0.8, mistakeMaxS: 1.5 },
+  { name: 'Veteran',   color: '#ffd166', driftAmplitude: 1.2, driftFreq: 9,  mistakeRate: 0.006, mistakeMinS: 0.8, mistakeMaxS: 1.5 },
   // Aggressor: fastest on straights, worst in corners, error-prone.
-  { name: 'Aggressor', color: '#ef476f', driftAmplitude: 2.6, driftFreq: 5,  startStagger: 0.0030, startLat: -3, mistakeRate: 0.028, mistakeMinS: 1.2, mistakeMaxS: 2.4 },
+  { name: 'Aggressor', color: '#ef476f', driftAmplitude: 2.6, driftFreq: 5,  mistakeRate: 0.028, mistakeMinS: 1.2, mistakeMaxS: 2.4 },
   // Rookie: middling everything, decent mistake rate.
-  { name: 'Rookie',    color: '#06d6a0', driftAmplitude: 1.8, driftFreq: 13, startStagger: 0.0055, startLat:  0, mistakeRate: 0.018, mistakeMinS: 1.0, mistakeMaxS: 2.0 },
+  { name: 'Rookie',    color: '#06d6a0', driftAmplitude: 1.8, driftFreq: 13, mistakeRate: 0.018, mistakeMinS: 1.0, mistakeMaxS: 2.0 },
 ]
 
 export function createOpponents(track: TrackBundle, difficulty: Difficulty): OpponentState[] {
@@ -68,9 +97,21 @@ export function createOpponents(track: TrackBundle, difficulty: Difficulty): Opp
   ]
 
   const opps: OpponentState[] = []
-  for (let i = 0; i < 3; i++) {
+  // Player sits in PLAYER_GRID_SLOT (the rear-most slot). Each AI's
+  // longitudinal position relative to the player is therefore:
+  //   metres ahead = (PLAYER_GRID_SLOT - aiSlot) * GRID_SLOT_M
+  // → we convert metres to t-fraction using the live track length so the
+  //   grid stays correctly proportioned regardless of circuit scale.
+  const trackLen = track.length
+  for (let i = 0; i < PROFILES.length; i++) {
+    const slot = AI_GRID_SLOTS[PROFILES[i].name] ?? (i + 1)
+    const metresAhead = (PLAYER_GRID_SLOT - slot) * GRID_SLOT_M
+    const startStagger = metresAhead / trackLen
+    const startLat = gridLatForSlot(slot)
     const profile: OpponentProfile = {
       ...PROFILES[i],
+      startStagger,
+      startLat,
       baseSpeed: Math.min(tuning[i].base * k, BASE_SPEED_CAP),
       latGripG: tuning[i].grip * k,
     }
@@ -162,14 +203,19 @@ export function updateOpponent(
     opp.lap++
   }
 
-  // Lateral position: small sin-wave drift normally, larger wobble during a
-  // mistake (looks like the car running wide / clipping a kerb).
+  // Lateral position: each AI keeps its own racing-lane offset (startLat) for
+  // the whole lap and wobbles around THAT, not the centreline. Without this,
+  // two AIs that share a startStagger but start on opposite sides of the
+  // grid (e.g. Veteran +3 m, Aggressor -3 m) both snap back to centre the
+  // moment the race starts and visibly overlap. Keeping the lane offset
+  // persistent also makes overtakes look intentional rather than telepor­ts
+  // through each other.
   const p = track.getPositionAt(opp.t).clone()
   const lat = new THREE.Vector3(-tg.z, 0, tg.x).normalize()
   const phase = opp.t * Math.PI * 2 * opp.profile.driftFreq
   const driftScale = opp.mistakeRemaining > 0 ? 3.5 : 1.0
-  const off = Math.sin(phase) * opp.profile.driftAmplitude * driftScale
-  p.addScaledVector(lat, off)
+  const wobble = Math.sin(phase) * opp.profile.driftAmplitude * driftScale
+  p.addScaledVector(lat, opp.profile.startLat + wobble)
   opp.pos.copy(p)
   opp.heading = Math.atan2(tg.x, tg.z)
 }

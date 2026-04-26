@@ -22,3 +22,19 @@ declare module '*.png' {
   const url: string
   export default url
 }
+declare module '*.webp?url' {
+  const url: string
+  export default url
+}
+declare module '*.webp' {
+  const url: string
+  export default url
+}
+declare module '*.mp4?url' {
+  const url: string
+  export default url
+}
+declare module '*.mp4' {
+  const url: string
+  export default url
+}

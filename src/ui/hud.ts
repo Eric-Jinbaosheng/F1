@@ -42,11 +42,23 @@ export function createHud(): HudController {
       font-size: 32px; font-weight: 700;
       text-shadow: 0 2px 8px rgba(0,0,0,0.7);
     `
+    // On mobile (coarse pointer), the input mode is obvious from how the
+    // user is holding the device — the cyan info chip just clutters the
+    // screen, so we skip rendering it. Desktop keeps it as a hint for
+    // keyboard / mouse-joystick controls.
+    const isMobile = (() => {
+      try {
+        return window.matchMedia('(pointer: coarse)').matches
+      } catch {
+        return false
+      }
+    })()
     modeEl = document.createElement('div')
     modeEl.style.cssText = `
       position: absolute; left: 24px; top: 24px;
       font-size: 12px; padding: 4px 8px; border-radius: 4px;
       background: rgba(0,0,0,0.5); color: #25f4ee;
+      ${isMobile ? 'display: none;' : ''}
     `
     posEl = document.createElement('div')
     posEl.style.cssText = `
