@@ -51,14 +51,15 @@ const BASE_SPEED_CAP = 84
  *   slot 1 (pole) — pole side, 0 m back
  *   slot 2        — off side,  GRID_SLOT_M back
  *   slot 3        — pole side, 2·GRID_SLOT_M back
- *   slot 4        — off side,  3·GRID_SLOT_M back  (← player sits here)
+ *   slot 4        — off side,  3·GRID_SLOT_M back
+ *   slot 5        — pole side, 4·GRID_SLOT_M back  (← player sits here)
  *   ...
  * Pole-side / off-side defined by sign of POLE_LAT_M.
  */
 export const GRID_SLOT_M = 8
 export const POLE_LAT_M = 3
-/** Player occupies the rear-most grid slot (4-car field → P4). */
-export const PLAYER_GRID_SLOT = 4
+/** Player occupies the rear-most grid slot (5-car field → P5). */
+export const PLAYER_GRID_SLOT = 5
 
 /** Lateral offset (signed metres) for the given 1-based grid slot. */
 export function gridLatForSlot(slot: number): number {
@@ -72,6 +73,7 @@ const AI_GRID_SLOTS: Record<string, number> = {
   Veteran: 1,   // pole
   Aggressor: 2, // P2
   Rookie: 3,    // P3
+  RedBull: 4,   // P4
 }
 
 const PROFILES: Array<Omit<OpponentProfile, 'baseSpeed' | 'latGripG' | 'startStagger' | 'startLat'>> = [
@@ -81,6 +83,8 @@ const PROFILES: Array<Omit<OpponentProfile, 'baseSpeed' | 'latGripG' | 'startSta
   { name: 'Aggressor', color: '#ef476f', driftAmplitude: 2.6, driftFreq: 5,  mistakeRate: 0.028, mistakeMinS: 1.2, mistakeMaxS: 2.4 },
   // Rookie: middling everything, decent mistake rate.
   { name: 'Rookie',    color: '#06d6a0', driftAmplitude: 1.8, driftFreq: 13, mistakeRate: 0.018, mistakeMinS: 1.0, mistakeMaxS: 2.0 },
+  // RedBull: the former player RB19, now a clean and quick AI rival.
+  { name: 'RedBull',   color: '#1e41ff', driftAmplitude: 1.4, driftFreq: 7,  mistakeRate: 0.012, mistakeMinS: 0.9, mistakeMaxS: 1.8 },
 ]
 
 export function createOpponents(track: TrackBundle, difficulty: Difficulty): OpponentState[] {
@@ -94,6 +98,7 @@ export function createOpponents(track: TrackBundle, difficulty: Difficulty): Opp
     { base: 71, grip: 1.05 },   // Veteran   ≈ 255 km/h
     { base: 78, grip: 0.85 },   // Aggressor ≈ 281 km/h (capped at 302 on hard)
     { base: 69, grip: 0.95 },   // Rookie    ≈ 248 km/h
+    { base: 74, grip: 1.00 },   // RedBull   ≈ 266 km/h
   ]
 
   const opps: OpponentState[] = []

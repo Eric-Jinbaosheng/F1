@@ -1,13 +1,17 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import type { OpponentState } from '../game/opponents'
 import mclarenGlbUrl from '../assets/models/McLaren_MCL35M.opt.glb?url'
 import ferrariGlbUrl from '../assets/models/Ferrari_26.opt.glb?url'
-import mercedesGlbUrl from '../assets/models/Mercedes_W11.opt.glb?url'
+import mercedesGlbUrl from '../assets/models/Mercedes_W13.glb?url'
+import redbullGlbUrl from '../assets/models/RB19_REDBULL.opt.glb?url'
+import dracoDecoderJs from 'three/examples/jsm/libs/draco/gltf/draco_decoder.js?raw'
 
 export interface OpponentCarBundle {
   group: THREE.Group
+  ready: Promise<void>
   update: (opps: OpponentState[]) => void
   dispose: () => void
 }
@@ -34,9 +38,10 @@ interface NpcModel {
 /** Map opponent profile name → GLB to swap the placeholder for. The names
  *  must match PROFILES in src/game/opponents.ts. */
 const NPC_MODELS: Record<string, NpcModel> = {
-  Veteran: { url: mercedesGlbUrl },
+  Veteran: { url: mercedesGlbUrl, reverse: true },
   Aggressor: { url: mclarenGlbUrl },
   Rookie: { url: ferrariGlbUrl, reverse: true },
+  RedBull: { url: redbullGlbUrl },
 }
 
 /** Target on-track HEIGHT for NPC GLBs. RB19 ends up ≈0.88 m tall after
@@ -46,6 +51,23 @@ const NPC_MODELS: Record<string, NpcModel> = {
  *  larger target uniformly bumps them up so they read as full-size F1
  *  cars next to the player. Tweak here if they feel too big/small. */
 const NPC_TARGET_HEIGHT_M = 1.15
+
+let dracoLoader: DRACOLoader | null = null
+
+function getDracoLoader(): DRACOLoader {
+  if (!dracoLoader) {
+    dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderConfig({ type: 'js' })
+    dracoLoader.setWorkerLimit(1)
+    ;(dracoLoader as unknown as {
+      _loadLibrary: (url: string, responseType: string) => Promise<string | ArrayBuffer>
+    })._loadLibrary = async (url: string) => {
+      if (url.endsWith('draco_decoder.js')) return dracoDecoderJs
+      throw new Error(`Unsupported Draco decoder asset: ${url}`)
+    }
+  }
+  return dracoLoader
+}
 
 function buildShell(color: string): ShellRefs {
   const group = new THREE.Group()
@@ -133,6 +155,7 @@ function loadScene(model: NpcModel): Promise<THREE.Group> {
     p = (async () => {
       const loader = new GLTFLoader()
       loader.setMeshoptDecoder(MeshoptDecoder)
+      loader.setDRACOLoader(getDracoLoader())
       const res = await fetch(url)
       const buf = await res.arrayBuffer()
       const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => {
@@ -182,6 +205,7 @@ export function createOpponentCars(opps: OpponentState[]): OpponentCarBundle {
   const root = new THREE.Group()
   root.name = 'opponents'
   const shells: ShellRefs[] = []
+  const loads: Promise<void>[] = []
 
   for (const opp of opps) {
     const shell = buildShell(opp.profile.color)
@@ -191,7 +215,7 @@ export function createOpponentCars(opps: OpponentState[]): OpponentCarBundle {
 
     const npcModel = NPC_MODELS[opp.profile.name]
     if (npcModel) {
-      void loadScene(npcModel).then((scene) => {
+      const load = loadScene(npcModel).then((scene) => {
         if (!shell.placeholderActive) return
         disposePlaceholder(shell)
         const cloned = scene.clone(true)
@@ -200,8 +224,11 @@ export function createOpponentCars(opps: OpponentState[]): OpponentCarBundle {
       }).catch(() => {
         // Keep placeholder visible.
       })
+      loads.push(load)
     }
   }
+
+  const ready = Promise.all(loads).then(() => undefined)
 
   const update = (s: OpponentState[]): void => {
     for (let i = 0; i < shells.length && i < s.length; i++) {
@@ -227,5 +254,5 @@ export function createOpponentCars(opps: OpponentState[]): OpponentCarBundle {
     }
   }
 
-  return { group: root, update, dispose }
+  return { group: root, ready, update, dispose }
 }

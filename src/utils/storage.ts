@@ -9,6 +9,7 @@ export interface F1SStorage {
   nickname: string
   unlocks: string[]
   lastFaceImg: string | null
+  performanceMode: boolean
 }
 
 const DEFAULTS: F1SStorage = {
@@ -18,6 +19,7 @@ const DEFAULTS: F1SStorage = {
   nickname: '',
   unlocks: [],
   lastFaceImg: null,
+  performanceMode: true,
 }
 
 function readKey<K extends keyof F1SStorage>(key: K): F1SStorage[K] {
@@ -60,4 +62,7 @@ export const storage = {
 
   getLastFaceImg: () => readKey('lastFaceImg'),
   setLastFaceImg: (b64: string) => writeKey('lastFaceImg', b64),
+
+  getPerformanceMode: () => readKey('performanceMode'),
+  setPerformanceMode: (enabled: boolean) => writeKey('performanceMode', enabled),
 }

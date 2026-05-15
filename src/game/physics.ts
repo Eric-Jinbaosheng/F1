@@ -2,12 +2,13 @@ import * as THREE from 'three'
 import { clamp } from '../utils/math'
 import type { GameInput } from '../input'
 import type { TrackBundle } from '../render/track'
+import { gridLatForSlot, PLAYER_GRID_SLOT } from './opponents'
 
 const MAX_SPEED = 85 // m/s ≈ 306 km/h
 const ACCEL = 50 // m/s² at full throttle (arcade-snappy)
 const BRAKE = 70 // m/s²
 const DRAG_K = 0.55 // 1/s linear drag → terminal at full throttle ≈ MAX_SPEED
-const TURN_RATE = 2.6 // rad/s at low speed (higher = tighter turn radius)
+const TURN_RATE = 3.12 // rad/s at low speed (higher = tighter turn radius)
 const SMART_LERP = 0.06
 // Geometry-coupled boundaries (track.ts: ROAD_HALF_WIDTH=7, KERB_WIDTH=2):
 // SOFT_OFFSET sits at the road/kerb seam → gentle pull-back when on kerb.
@@ -34,8 +35,8 @@ export interface PhysicsBundle {
   triggerCrash: () => void
 }
 
-/** Place the player on their F1 grid slot (rear-most, off-side column).
- *  Mirrors src/game/opponents.ts gridLatForSlot(PLAYER_GRID_SLOT=4) so the
+/** Place the player on their F1 grid slot (rear-most column).
+ *  Mirrors src/game/opponents.ts gridLatForSlot(PLAYER_GRID_SLOT) so the
  *  diagonal F1-style grid stays consistent across the field. */
 function gridStartPos(tr: TrackBundle, out: THREE.Vector3): void {
   out.copy(tr.getPositionAt(0))
@@ -44,8 +45,7 @@ function gridStartPos(tr: TrackBundle, out: THREE.Vector3): void {
   const lx = -tg.z
   const lz = tg.x
   const len = Math.hypot(lx, lz) || 1
-  // Even slot → off side → -POLE_LAT_M (= -3). Player is slot 4.
-  const PLAYER_LAT = -3
+  const PLAYER_LAT = gridLatForSlot(PLAYER_GRID_SLOT)
   out.x += (lx / len) * PLAYER_LAT
   out.z += (lz / len) * PLAYER_LAT
 }

@@ -1,9 +1,11 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import type { TeamId } from '../utils/storage'
 import { showToast } from '../utils/error'
-import carGlbUrl from '../assets/models/RB19_REDBULL.opt.glb?url'
+import carGlbUrl from '../assets/models/抖音F1压缩.glb?url'
+import dracoDecoderJs from 'three/examples/jsm/libs/draco/gltf/draco_decoder.js?raw'
 
 export const TEAM_COLORS: Record<TeamId, { primary: string; secondary: string; spark: string }> = {
   merc: { primary: '#00d2be', secondary: '#181818', spark: '#a8fff5' },
@@ -26,6 +28,23 @@ export interface CarBundle {
 const PARTICLE_MAX = 256
 const PARTICLE_LIFE = 1.0
 const TARGET_LENGTH_M = 5.0 // real F1 ≈ 5.5 m; pick 5 to feel right against 16 m wide road
+
+let dracoLoader: DRACOLoader | null = null
+
+function getDracoLoader(): DRACOLoader {
+  if (!dracoLoader) {
+    dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderConfig({ type: 'js' })
+    dracoLoader.setWorkerLimit(1)
+    ;(dracoLoader as unknown as {
+      _loadLibrary: (url: string, responseType: string) => Promise<string | ArrayBuffer>
+    })._loadLibrary = async (url: string) => {
+      if (url.endsWith('draco_decoder.js')) return dracoDecoderJs
+      throw new Error(`Unsupported Draco decoder asset: ${url}`)
+    }
+  }
+  return dracoLoader
+}
 
 interface PlaceholderRefs {
   group: THREE.Group
@@ -214,6 +233,7 @@ export function createCar(): CarBundle {
   // ---- Async GLB load via fetch + parse (data: URL safe across file://).
   const loader = new GLTFLoader()
   loader.setMeshoptDecoder(MeshoptDecoder)
+  loader.setDRACOLoader(getDracoLoader())
   ;(async () => {
     try {
       log(`fetching:\n${carGlbUrl.slice(0, 120)}${carGlbUrl.length > 120 ? '…' : ''}`)

@@ -16,8 +16,6 @@ import { createResult } from './ui/result'
 import { createIntro } from './ui/intro'
 import { createMinimap } from './ui/minimap'
 import { createPersonalityCard } from './ui/personalityCard'
-import { createLobby } from './ui/lobby'
-import { RoomClient, colourForClient } from './multiplayer/room'
 import type { PlayerStats } from './racerPersonality'
 import { SFX, unlockAudio } from './audio/zzfx'
 import { createAudioRig, type AudioRig } from './audio/engine'
@@ -25,6 +23,8 @@ import { CommentarySystem } from './audio/commentary'
 import { CoachSystem } from './audio/coach'
 import {
   createOpponents,
+  GRID_SLOT_M,
+  PLAYER_GRID_SLOT,
   updateOpponent,
   progress as raceProgress,
   type OpponentState,
@@ -59,10 +59,7 @@ interface World {
    *  0 = AIs are still racing. */
   allAisFinishedAt: number
   finishedOrder: Array<'player' | number>
-  /** Active LAN room when `opponentMode === 'lan'`. */
-  room: RoomClient | null
-  /** clientId → matrix-row index in `world.opponents` (for LAN mode). */
-  peerToOppIdx: Map<number, number>
+  performanceMode: boolean
 }
 
 function bootstrap(): void {
@@ -75,8 +72,9 @@ function bootstrap(): void {
   }
 
   let bundle: ReturnType<typeof createScene>
+  const initialPerformanceMode = storage.getPerformanceMode()
   try {
-    bundle = createScene(container)
+    bundle = createScene(container, { performanceMode: initialPerformanceMode })
   } catch (e) {
     console.warn('[F1S] scene init failed:', e)
     const detail =
@@ -131,8 +129,7 @@ function bootstrap(): void {
     opponentFinished: [],
     allAisFinishedAt: 0,
     finishedOrder: [],
-    room: null,
-    peerToOppIdx: new Map(),
+    performanceMode: initialPerformanceMode,
   }
 
   // --- Commentary: preload clips eagerly, unlock on first user gesture.
@@ -270,92 +267,22 @@ function bootstrap(): void {
     world.finishedOrder = []
   }
 
-  // Helper: build 3 AIs at the chosen difficulty and add them to the scene.
-  const spawnOpponents = (): void => {
+  // Helper: build AIs at the chosen difficulty and add them to the scene.
+  const spawnOpponents = async (): Promise<void> => {
     teardownOpponents()
     world.opponents = createOpponents(track, ctx.difficulty)
-    world.opponentCars = createOpponentCars(world.opponents)
-    bundle.scene.add(world.opponentCars.group)
-    world.opponentCars.update(world.opponents)
+    const opponentCars = createOpponentCars(world.opponents)
+    world.opponentCars = opponentCars
+    opponentCars.update(world.opponents)
+    showToast('赛车模型加载中...', 1200)
+    await opponentCars.ready
+    if (world.opponentCars !== opponentCars) return
+    bundle.scene.add(opponentCars.group)
+    opponentCars.update(world.opponents)
     world.opponentBumpCooldown = world.opponents.map(() => 0)
     world.opponentFinished = world.opponents.map(() => false)
     world.allAisFinishedAt = 0
     world.finishedOrder = []
-  }
-
-  /** Build placeholder OpponentState entries for every peer in the room
-   *  (excluding the local player). Their `pos` / `heading` / `lap` fields
-   *  are then driven by `syncLanOpponents()` each frame. */
-  const spawnLanOpponents = (): void => {
-    teardownOpponents()
-    if (!world.room) return
-    const myId = world.room.getMyId()
-    const peers = world.room.getPeers().filter((p) => p.clientId !== myId)
-    world.peerToOppIdx.clear()
-    const startP = track.getPositionAt(0)
-    for (let i = 0; i < peers.length; i++) {
-      const peer = peers[i]
-      // Each LAN car is a stub OpponentState with cosmetic profile only —
-      // the AI tuning fields (baseSpeed/grip/mistake) are unused because
-      // we never call updateOpponent on them.
-      const stub = {
-        profile: {
-          name: peer.name,
-          color: colourForClient(peer.clientId),
-          baseSpeed: 0,
-          latGripG: 0,
-          driftAmplitude: 0,
-          driftFreq: 0,
-          startStagger: 0,
-          startLat: 0,
-          mistakeRate: 0,
-          mistakeMinS: 0,
-          mistakeMaxS: 0,
-        },
-        t: 0,
-        lap: 0,
-        speed: 0,
-        pos: startP.clone(),
-        heading: 0,
-        mistakeRemaining: 0,
-        mistakeJustTriggered: false,
-      }
-      world.opponents.push(stub)
-      world.peerToOppIdx.set(peer.clientId, i)
-    }
-    world.opponentCars = createOpponentCars(world.opponents)
-    bundle.scene.add(world.opponentCars.group)
-    world.opponentCars.update(world.opponents)
-    world.opponentBumpCooldown = world.opponents.map(() => 0)
-    world.opponentFinished = world.opponents.map(() => false)
-    world.finishedOrder = []
-  }
-
-  /** Per-frame: pull latest peer state from the room into the matching
-   *  OpponentState slots so existing rendering / ranking logic can reuse
-   *  them transparently. */
-  const syncLanOpponents = (): void => {
-    if (!world.room) return
-    const myId = world.room.getMyId()
-    for (const peer of world.room.getPeers()) {
-      if (peer.clientId === myId) continue
-      const idx = world.peerToOppIdx.get(peer.clientId)
-      if (idx === undefined) continue
-      const opp = world.opponents[idx]
-      if (!opp) continue
-      // Direct assignment — peers send 20 Hz, racing camera at 60 FPS will
-      // pick the latest sample. Add interpolation here later if the
-      // motion looks too jittery on lossy WiFi.
-      opp.pos.set(peer.pos.x, peer.pos.y, peer.pos.z)
-      opp.heading = peer.heading
-      opp.speed = peer.speed
-      opp.t = peer.lapProgress
-      opp.lap = peer.lap
-      if (peer.finishedLapMs !== null && !world.opponentFinished[idx]) {
-        world.opponentFinished[idx] = true
-        world.finishedOrder.push(idx)
-      }
-    }
   }
 
   /** Compute current ranking — total race progress (lap + t). */
@@ -414,8 +341,8 @@ function bootstrap(): void {
     const inp = world.input?.getInput()
     const accelTarget = inp && inp.throttle > 0.7 ? 1 : 0
     accelLerp += (accelTarget - accelLerp) * 0.08 // smooth blend
-    // Cruise / countdown sits at 4 m; accelerating pulls the camera back to 5 m.
-    const backDist = 4 + accelLerp * (5 - 4)
+    // Cruise / countdown sits 0.5 m farther back than the original camera.
+    const backDist = 4.5 + accelLerp * (5.5 - 4.5)
     const upDist = 2.2
 
     const back = new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading))
@@ -474,32 +401,16 @@ function bootstrap(): void {
         .addScaledVector(lat, 4)
         .add(new THREE.Vector3(0, 3.5, 0))
       bundle.camera.lookAt(carP.x, carP.y + 0.6, carP.z)
-      menu.show(async ({ difficulty, inputMode, commentaryMode, opponentMode }) => {
+      menu.show(async ({ difficulty, inputMode, performanceMode, commentaryMode }) => {
         ctx.difficulty = difficulty
+        world.performanceMode = performanceMode
+        storage.setPerformanceMode(performanceMode)
+        bundle.setPerformanceMode(world.performanceMode)
         // Mutually exclusive: only one voice channel runs at a time so
         // they don't talk over each other.
         world.commentary.setEnabled(commentaryMode === 'commentary')
         world.coach.setEnabled(commentaryMode === 'coach')
         if (commentaryMode === 'coach') world.coach.unlock()
-        // Persist the LAN choice for later state-machine branching.
-        ;(ctx as unknown as { opponentMode: 'ai' | 'lan' }).opponentMode = opponentMode
-        // Tear down any prior room before starting a new mode.
-        if (world.room) {
-          world.room.disconnect()
-          world.room = null
-        }
-        // For LAN mode, run the lobby BEFORE the audio init so the
-        // gesture chain (click → audio unlock → permission asks) still
-        // happens inside the same user-driven flow.
-        if (opponentMode === 'lan') {
-          const lobby = createLobby()
-          const result = await lobby.show('Player')
-          if (result.status === 'cancelled' || !result.client) {
-            // User backed out — drop them back at the menu.
-            return sm.transition(GameState.MENU)
-          }
-          world.room = result.client
-        }
         SFX.uiClick()
         unlockAudio()
         // Boot the engine + BGM rig from inside the click handler so iOS
@@ -564,9 +475,7 @@ function bootstrap(): void {
   sm.register(GameState.COUNTDOWN, {
     enter: async () => {
       placeCarAtStart()
-      // Branch on opponent source: AI bots vs. LAN peers.
-      if (world.room) spawnLanOpponents()
-      else spawnOpponents()
+      await spawnOpponents()
       // Commentator kicks off the build-up.
       world.commentary.unlock()
       world.commentary.trigger('countdown', true)
@@ -583,7 +492,7 @@ function bootstrap(): void {
       const back = new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading))
       bundle.camera.position
         .copy(carP)
-        .addScaledVector(back, 4)
+        .addScaledVector(back, 4.5)
         .add(new THREE.Vector3(0, 2.2, 0))
       const look = carP.clone().addScaledVector(back.negate(), 6)
       look.y += 0.6
@@ -595,14 +504,14 @@ function bootstrap(): void {
         lapMs: 0,
         mode: ctx.inputMode,
       })
-      // Build lights gantry. Pole position (P1, Veteran) sits 24 m ahead
+      // Build lights gantry. Pole position (P1, Veteran) sits ahead
       // of t=0 — the lights stand a few metres further down so the pole
       // sitter looks UP at them, matching real F1 starting-lights
       // placement (≈10 m past the front-row grid box).
       const startPos = track.getPositionAt(0).clone()
       const tg = track.getTangentAt(0)
       const yaw = Math.atan2(tg.x, tg.z)
-      const POLE_M = 24 // matches PLAYER_GRID_SLOT * GRID_SLOT_M (4-1)*8
+      const POLE_M = (PLAYER_GRID_SLOT - 1) * GRID_SLOT_M
       const LIGHTS_AHEAD_OF_POLE_M = 10
       startPos.addScaledVector(
         new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
@@ -680,7 +589,6 @@ function bootstrap(): void {
     },
   })
 
-  let lastBroadcastAt = 0
   sm.register(GameState.RACE, {
     enter: () => {
       // Lights gantry stays in the world after lights-out — real F1 leaves
@@ -699,7 +607,6 @@ function bootstrap(): void {
       world.commentary.unlock() // countdown click already happened
       world.commentary.trigger('race_start', true)
       resetCornerState()
-      lastBroadcastAt = 0
     },
     update: (_, dt) => {
       if (!world.input) return
@@ -723,19 +630,11 @@ function bootstrap(): void {
       const COLLIDE_DIST_SQ = COLLIDE_DIST * COLLIDE_DIST
       const BUMP_COOLDOWN_S = 0.8
       const playerProgress = physics.state.lapsCompleted + physics.state.lapProgress
-      // In LAN mode we do NOT run AI for opponents — peer state has just
-      // been mirrored into world.opponents by syncLanOpponents() above.
-      const isLan = world.room !== null
-      if (isLan) syncLanOpponents()
       for (let i = 0; i < world.opponents.length; i++) {
         const opp = world.opponents[i]
-        if (isLan) {
-          // No-op: pos/heading/lap already pulled from network. Just keep
-          // the finish-detection consistent (peer sets opponentFinished
-          // via the finish message handler too).
-        } else if (world.opponentFinished[i]) {
-          // Stop AIs from running past the line indefinitely so the field
-          // settles at the finish — they decelerate after their first lap.
+        // Stop AIs from running past the line indefinitely so the field
+        // settles at the finish — they decelerate after their first lap.
+        if (world.opponentFinished[i]) {
           opp.speed *= 0.97
           const tg = track.getTangentAt(opp.t)
           opp.pos.x += tg.x * opp.speed * dt
@@ -793,22 +692,6 @@ function bootstrap(): void {
         }
       }
       if (world.opponentCars) world.opponentCars.update(world.opponents)
-
-      // --- LAN broadcast: send my state ~20 Hz (every 50 ms). Peers
-      // interpolate; we only send raw pose + lap so packet stays tiny.
-      if (world.room) {
-        const now = performance.now()
-        if (now - lastBroadcastAt > 50) {
-          lastBroadcastAt = now
-          world.room.sendState({
-            pos: { x: physics.state.pos.x, y: 0, z: physics.state.pos.z },
-            heading: physics.state.heading,
-            speed: physics.state.speed,
-            lapProgress: physics.state.lapProgress,
-            lap: physics.state.lapsCompleted,
-          })
-        }
-      }
 
       // --- Commentary feed: build a snapshot for the auto-detector.
       const _rank = computePosition()
@@ -890,12 +773,6 @@ function bootstrap(): void {
   sm.register(GameState.FINISH, {
     enter: async () => {
       SFX.finishHorn()
-      // LAN: tell peers we crossed the line so they can settle their
-      // own ranking + opponentFinished[] tracker.
-      if (world.room) {
-        const lapMs = (ctx.raceData.bestLap ?? 0)
-        world.room.sendFinish(lapMs)
-      }
       world.commentary.trigger('finish_line', true)
       // Tail-end commentary depends on outcome (P1, podium, messy, etc.).
       world.commentary.triggerFinishOutcome({
@@ -974,12 +851,6 @@ function bootstrap(): void {
           world.jumpStartPenaltyMs = 0
           ctx.raceData.bestLap = null
           teardownOpponents()
-          // Drop the room when returning to menu — a fresh "联机对战"
-          // pick will spin up a new connection.
-          if (world.room) {
-            world.room.disconnect()
-            world.room = null
-          }
           void sm.transition(GameState.MENU)
         },
       })
