@@ -6,6 +6,10 @@ declare module '*.glb' {
   const url: string
   export default url
 }
+declare module '*.js?raw' {
+  const source: string
+  export default source
+}
 declare module '*.mp3?url' {
   const url: string
   export default url

@@ -1489,15 +1489,15 @@ export function createTrack(): TrackBundle {
   // No separate start/finish line — the gantry above already marks t=0
   // and a painted strip at the same elevation as the grid-box outlines
   // would visually merge with them.
-  // Layout matches src/game/opponents.ts: 4 slots, 8 m staggered, ±3 m lat,
+  // Layout matches src/game/opponents.ts: 5 slots, 8 m staggered, ±3 m lat,
   // odd slots on pole side, even slots on off side. Box size is sized to a
   // real F1 grid box (≈3 m wide × 6 m long with a thin white outline). The
   // boxes sit a hair above road y to avoid z-fighting with the asphalt.
   {
     const GRID_SLOT_M = 8
     const POLE_LAT_M = 3
-    const PLAYER_SLOT = 4
-    const TOTAL_SLOTS = 4
+    const PLAYER_SLOT = 5
+    const TOTAL_SLOTS = 5
     const BOX_W = 3.0
     const BOX_L = 6.0
     const BOX_THICK = 0.18
@@ -1512,7 +1512,7 @@ export function createTrack(): TrackBundle {
     })
     disposables.materials.push(gridMat)
     // Two shared geometries: cross-track edge (front/back) and along-track
-    // edge (left/right). 4 instances per slot × 4 slots = 16 cheap meshes.
+    // edge (left/right). 3 outline pieces per slot.
     const edgeCross = new THREE.BoxGeometry(BOX_W, 0.04, BOX_THICK)
     const edgeAlong = new THREE.BoxGeometry(BOX_THICK, 0.04, BOX_L)
     disposables.geometries.push(edgeCross, edgeAlong)

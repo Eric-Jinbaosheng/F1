@@ -6,6 +6,7 @@ export interface SceneBundle {
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   sun: THREE.DirectionalLight
+  setPerformanceMode: (enabled: boolean) => void
   /** Call each frame with the player car's world position so the shadow
    *  camera frustum stays centred on it for crisp local shadows. */
   updateShadowFollow: (worldPos: THREE.Vector3) => void
@@ -15,6 +16,16 @@ export interface SceneBundle {
   render: () => void
   dispose: () => void
 }
+
+export interface SceneOptions {
+  performanceMode?: boolean
+}
+
+const pixelRatioCap = (performanceMode: boolean): number =>
+  performanceMode ? 1.5 : 2
+
+const shadowMapSize = (performanceMode: boolean): number =>
+  performanceMode ? 1024 : 2048
 
 /** Procedurally builds a sky/ground equirect texture (256×128) we can run
  *  through PMREMGenerator. Cheap, ~3 ms at boot, no asset bytes. */
@@ -50,7 +61,8 @@ function buildSkyEquirect(): THREE.CanvasTexture {
   return tex
 }
 
-export function createScene(container: HTMLElement): SceneBundle {
+export function createScene(container: HTMLElement, options: SceneOptions = {}): SceneBundle {
+  let performanceMode = options.performanceMode === true
   const scene = new THREE.Scene()
   // Bright daytime sky.
   scene.background = new THREE.Color('#87ceeb')
@@ -71,22 +83,36 @@ export function createScene(container: HTMLElement): SceneBundle {
     alpha: false,
     // Vastly higher depth precision — eliminates z-fighting between
     // overlapping coplanar road segments (the T13 "shimmer").
-    logarithmicDepthBuffer: true,
+    logarithmicDepthBuffer: !performanceMode,
   })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  const applyPixelRatio = (): void => {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap(performanceMode)))
+  }
+  applyPixelRatio()
   renderer.setSize(container.clientWidth, container.clientHeight)
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = 1.0
   renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = performanceMode ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap
   container.appendChild(renderer.domElement)
 
   // Direct sunlight — strong & warm. High contrast vs. fill light = crisp 3D.
   const sun = new THREE.DirectionalLight(0xfff2d4, 3.2)
   sun.position.set(80, 140, 60)
   sun.castShadow = true
-  sun.shadow.mapSize.set(2048, 2048)
+  const applyShadowQuality = (): void => {
+    renderer.shadowMap.enabled = true
+    renderer.shadowMap.type = performanceMode ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap
+    const shadowSize = shadowMapSize(performanceMode)
+    sun.shadow.mapSize.set(shadowSize, shadowSize)
+    if (sun.shadow.map) {
+      sun.shadow.map.dispose()
+      sun.shadow.map = null
+    }
+    renderer.shadowMap.needsUpdate = true
+  }
+  applyShadowQuality()
   // Tight frustum that follows the car (see updateShadowFollow). Default
   // covers ±50 m; higher resolution per texel = sharper car shadow.
   sun.shadow.camera.near = 1
@@ -139,6 +165,13 @@ export function createScene(container: HTMLElement): SceneBundle {
     renderer.toneMappingExposure = preset.exposure
   }
 
+  const setPerformanceMode = (enabled: boolean): void => {
+    performanceMode = enabled
+    applyShadowQuality()
+    applyPixelRatio()
+    resize()
+  }
+
   const updateShadowFollow = (worldPos: THREE.Vector3): void => {
     // Re-centre the shadow camera frustum on the player so its 100×100 m
     // window of high-res shadow always contains the car + nearby road.
@@ -171,5 +204,5 @@ export function createScene(container: HTMLElement): SceneBundle {
   window.addEventListener('resize', resize)
   window.addEventListener('orientationchange', resize)
 
-  return { scene, camera, renderer, sun, applyWeather, updateShadowFollow, resize, render, dispose }
+  return { scene, camera, renderer, sun, setPerformanceMode, applyWeather, updateShadowFollow, resize, render, dispose }
 }

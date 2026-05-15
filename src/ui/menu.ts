@@ -4,14 +4,16 @@ import type { Difficulty } from '../game/opponents'
 import type { InputMode } from '../input'
 
 export type CommentaryMode = 'off' | 'commentary' | 'coach'
-export type OpponentMode = 'ai' | 'lan'
 
 export interface MenuStartConfig {
   difficulty: Difficulty
   inputMode: InputMode
+  performanceMode: boolean
+  /** Audio guidance during the race:
+   *   - 'commentary' = pre-recorded race-announcer clips
+   *   - 'coach'      = TTS driving-coach cues (turn / brake / push)
+   *   - 'off'        = silent */
   commentaryMode: CommentaryMode
-  /** AI bots vs. LAN multiplayer (dev-mode only). */
-  opponentMode: OpponentMode
 }
 
 export interface MenuController {
@@ -37,9 +39,9 @@ const COMMENTARY_LABELS: Record<CommentaryMode, { label: string; tag: string }> 
   coach:      { label: '辅 助', tag: '驾驶教练' },
 }
 
-const OPPONENT_LABELS: Record<OpponentMode, { label: string; tag: string }> = {
-  ai:  { label: 'AI 对手',   tag: '3 名机器人' },
-  lan: { label: '联机对战', tag: '同 WiFi 真人' },
+const QUALITY_LABELS: Record<'performance' | 'quality', { label: string; tag: string }> = {
+  performance: { label: '流 畅', tag: '低负载' },
+  quality: { label: '高 质', tag: '完整光影' },
 }
 
 const isCoarsePointer = (): boolean => {
@@ -130,7 +132,8 @@ export function createMenu(): MenuController {
     let chosenDiff: Difficulty = 'medium'
     let chosenInput: InputMode = isCoarsePointer() ? 'touch' : 'keyboard'
     let chosenCommentary: CommentaryMode = 'commentary'
-    let chosenOpponent: OpponentMode = 'ai'
+    let chosenQuality: 'performance' | 'quality' =
+      storage.getPerformanceMode() || isCoarsePointer() ? 'performance' : 'quality'
 
     const diffRow = makeRow(
       '难  度',
@@ -156,12 +159,15 @@ export function createMenu(): MenuController {
       (k) => { chosenCommentary = k as CommentaryMode },
     )
 
-    const opponentRow = makeRow(
-      '对  手',
-      ['ai', 'lan'],
-      OPPONENT_LABELS as Record<string, { label: string; tag: string }>,
-      chosenOpponent,
-      (k) => { chosenOpponent = k as OpponentMode },
+    const qualityRow = makeRow(
+      '画  质',
+      ['performance', 'quality'],
+      QUALITY_LABELS,
+      chosenQuality,
+      (k) => {
+        chosenQuality = k as 'performance' | 'quality'
+        storage.setPerformanceMode(chosenQuality === 'performance')
+      },
     )
 
     const btn = document.createElement('button')
@@ -203,8 +209,8 @@ export function createMenu(): MenuController {
       onStart({
         difficulty: chosenDiff,
         inputMode: chosenInput,
+        performanceMode: chosenQuality === 'performance',
         commentaryMode: chosenCommentary,
-        opponentMode: chosenOpponent,
       })
     }, { once: true })
 
@@ -222,7 +228,7 @@ export function createMenu(): MenuController {
     host.appendChild(diffRow)
     host.appendChild(inputRow)
     host.appendChild(commentaryRow)
-    host.appendChild(opponentRow)
+    host.appendChild(qualityRow)
     host.appendChild(btn)
     host.appendChild(note)
     host.appendChild(bestEl)

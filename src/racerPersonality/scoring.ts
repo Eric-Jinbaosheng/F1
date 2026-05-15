@@ -72,18 +72,37 @@ export interface MatchResult {
 
 /** Score every archetype, sort desc, return best + full ranking.
  *
- *  With a small active roster (HMLT/ANTO/VSTP for now) the deterministic
- *  argmax tends to land on the same archetype for similar play styles —
- *  the player feels like they always get "Kimi" no matter what. To
- *  preserve variety while still rewarding good play, we sample from the
- *  top candidates weighted by score^SOFTNESS. The top match still wins
- *  most of the time, but lower-ranked archetypes get a real chance.
+ *  With a small active roster (HMLT/ANTO/VSTP) deterministic argmax
+ *  always picks the same archetype for typical play, so the player
+ *  feels like they "always get ANTO". We make the result genuinely
+ *  varied by:
  *
- *  Set SOFTNESS very high to revert to "always best"; very low to be
- *  near-uniform random.
+ *    1. Sampling near-uniformly from all active candidates (weighted
+ *       only loosely by score so good play still nudges the pick).
+ *    2. Refusing to repeat the immediately previous archetype when
+ *       the active pool has > 1 entry — ensures the player sees a
+ *       different card on consecutive runs.
  */
-const SOFTNESS = 5
-const TOP_N = 4 // sample from at most this many candidates
+const SOFTNESS: number = 1 // 0 = uniform; 1 = mild bias toward higher score
+const TOP_N = 6
+const LAST_PICK_KEY = 'f1s_last_personality'
+
+const readLastPick = (): string | null => {
+  try {
+    return typeof sessionStorage !== 'undefined'
+      ? sessionStorage.getItem(LAST_PICK_KEY)
+      : null
+  } catch {
+    return null
+  }
+}
+const writeLastPick = (code: string): void => {
+  try {
+    sessionStorage?.setItem(LAST_PICK_KEY, code)
+  } catch {
+    /* noop */
+  }
+}
 
 export function findBestRacerPersonality(
   player: PlayerStats,
@@ -94,8 +113,18 @@ export function findBestRacerPersonality(
     score: matchScore(player, p, weights),
   })).sort((a, b) => b.score - a.score)
 
-  const pool = ranked.slice(0, Math.min(TOP_N, ranked.length))
-  const weightsArr = pool.map((r) => Math.pow(Math.max(r.score, 1), SOFTNESS))
+  let pool = ranked.slice(0, Math.min(TOP_N, ranked.length))
+  // Refuse to re-pick the same archetype as the last run when we have
+  // alternatives — guarantees consecutive games show different cards.
+  const last = readLastPick()
+  if (last && pool.length > 1 && pool.some((r) => r.profile.typeCode === last)) {
+    const filtered = pool.filter((r) => r.profile.typeCode !== last)
+    if (filtered.length > 0) pool = filtered
+  }
+
+  const weightsArr = pool.map((r) =>
+    SOFTNESS === 0 ? 1 : Math.pow(Math.max(r.score, 1), SOFTNESS),
+  )
   const total = weightsArr.reduce((a, b) => a + b, 0)
   let r = Math.random() * total
   let pickedIdx = 0
@@ -107,6 +136,7 @@ export function findBestRacerPersonality(
     }
   }
   const picked = pool[pickedIdx]
+  writeLastPick(picked.profile.typeCode)
 
   // Promote the picked one to the head of `ranked` so callers that read
   // ranked[0] (e.g. for 匹配度) stay in sync with `best`.
